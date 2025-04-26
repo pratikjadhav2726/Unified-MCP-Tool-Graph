@@ -147,4 +147,6 @@ Let’s build smarter systems — one tool graph at a time.
 
 ## Updates on Development
 <img width="1024" alt="image" src="https://github.com/user-attachments/assets/0846520c-9992-474a-a939-6781db1fb768" />
+<img width="634" alt="image" src="https://github.com/user-attachments/assets/92fca6ca-dab2-4b25-8d19-a58030ae765a" />
+
 
