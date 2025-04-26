@@ -144,3 +144,7 @@ Let’s build smarter systems — one tool graph at a time.
 ---
 
 🔗 **Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
+
+## Updates on Development
+<img width="1024" alt="image" src="https://github.com/user-attachments/assets/0846520c-9992-474a-a939-6781db1fb768" />
+
