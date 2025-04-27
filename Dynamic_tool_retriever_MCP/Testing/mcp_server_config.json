@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+        "UnifiedMCP": {
+            "command": "python",
+            "args": [
+                "Dynamic_tool_retriever_MCP/server.py"
+            ],
+            "transport": "stdio"
+        }
+    }
+}
