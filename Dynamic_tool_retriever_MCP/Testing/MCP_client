@@ -1,0 +1,47 @@
+import asyncio
+from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from langchain_groq import ChatGroq
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Connect to your local DynamicToolRetrieverMCP server
+server_params = StdioServerParameters(
+    command="python",
+    args=["Dynamic_tool_retriever_MCP/server.py"],  # Change if your server file name is different
+)
+
+# Use ChatGroq instead of OpenAI
+model = ChatGroq(
+    model="mixtral-8x7b-32768",  # You can also use "llama3-8b-8192" or others
+    temperature=0.2,  # Make it a little creative but controlled
+    api_key=os.getenv("GROQ_API_KEY")  # Store your Groq API key in .env
+)
+
+async def run_agent():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # Load all tools dynamically from MCP server
+            tools = await load_mcp_tools(session)
+            print(f"Loaded {len(tools)} tools from MCP Server!")
+
+            # Create agent
+            agent = create_react_agent(model, tools)
+
+            # User task
+            task = "Summarize a scientific article into bullet points"
+            print(f"User Task: {task}")
+
+            response = await agent.ainvoke({"messages": [{"role": "user", "content": task}]})
+            print("\nFinal Response:\n", response)
+
+# Run it
+if __name__ == "__main__":
+    asyncio.run(run_agent())

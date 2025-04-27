@@ -1,15 +1,17 @@
 import json
-from neo4j import GraphDatabase
 import os
-import dotenv
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # Load parsed JSON with embeddings
 with open("Ingestion_pipeline/parsed_tools_with_embeddings.json", 'r') as f:
     tools_data = json.load(f)
-dotenv.load_dotenv()
 
 # Neo4j connection settings
-# Initialize Neo4j driver
-driver = GraphDatabase.driverGraphDatabase.driver(
+driver = GraphDatabase.driver(
     os.getenv("NEO4J_URI"),
     auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASSWORD"))
 )
@@ -18,7 +20,7 @@ driver = GraphDatabase.driverGraphDatabase.driver(
 CREATE_VENDOR_QUERY = """
 MERGE (v:Vendor {id: $vendor_id})
 SET v.name = $vendor_name,
-    v.url = $vendor_url,
+    v.description = $vendor_description,
     v.repository_url = $vendor_repo
 """
 
@@ -42,7 +44,7 @@ def insert_data(tx, record):
     tx.run(CREATE_VENDOR_QUERY, 
            vendor_id=record['vendor_id'],
            vendor_name=record['vendor_name'],
-           vendor_url=record['vendor_url'],
+           vendor_description=record['vendor_description'],
            vendor_repo=record['vendor_repo'])
     
     # Insert Tool

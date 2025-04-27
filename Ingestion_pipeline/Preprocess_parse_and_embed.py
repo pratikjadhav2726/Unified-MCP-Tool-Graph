@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 
 # Load your updated JSON file
-with open('MCP_Servers/Glama/Glama_MCP_Servers_with_tools_schema.json', 'r') as file:
+with open('Data/Glama/Glama_MCP_Servers_with_tools_schema.json', 'r') as file:
     mcp_servers = json.load(file)
 
 # Load lightweight local embedding model
@@ -20,9 +20,8 @@ for server_wrapper in mcp_servers:
         
         vendor_id = server.get('id')
         vendor_name = server.get('name')
-        vendor_description = server.get('description')
-        vendor_url = server.get('url')
-        vendor_repo = server.get('repository', {}).get('url')
+        vendor_description = server.get('description', '')
+        vendor_repo = server.get('repository', {}).get('url', '')
         
         tools = server.get('tools', [])
         
@@ -37,19 +36,21 @@ for server_wrapper in mcp_servers:
             input_schema = tool.get('inputSchema', {})
             properties = list(input_schema.get('properties', {}).keys())
             required_fields = input_schema.get('required', [])
+            
+            # Handle embedding
             if tool_description:
-            # Generate local embedding
                 embedding = model.encode(tool_description)
             else:
                 embedding = np.zeros((384,), dtype=float)
+            
             tool_record = {
                 'vendor_id': vendor_id,
                 'vendor_name': vendor_name,
-                'vendor_url': vendor_url,
+                'vendor_description': vendor_description,
                 'vendor_repo': vendor_repo,
                 'tool_name': tool_name,
                 'tool_description': tool_description,
-                'tool_embedding': embedding.tolist(),  # Convert to list
+                'tool_embedding': embedding.tolist(),  # Convert numpy array to list
                 'tool_parameters': properties,
                 'tool_required_parameters': required_fields
             }
