@@ -150,6 +150,8 @@ Let’s build smarter systems — one tool graph at a time.
 ## Updates on Development
 1. Created a GraphDB with Vendor and tools with embedings for vector search.
 2. Need a way to categorize vendors and connect vendors with same category. eg( Web Search, File System, Social Media etc.)
+3. No of Tools Supported 11066
+4. No of MCP Servers(Official + Community) 4161
 <img width="1024" alt="image" src="https://github.com/user-attachments/assets/0846520c-9992-474a-a939-6781db1fb768" />
 <img width="634" alt="image" src="https://github.com/user-attachments/assets/92fca6ca-dab2-4b25-8d19-a58030ae765a" />
 
