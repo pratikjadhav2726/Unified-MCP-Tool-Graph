@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 
 # Load your updated JSON file
-with open('Data/Glama/Glama_MCP_Servers_with_tools_schema.json', 'r') as file:
+with open('Data/Glama/all_servers.json', 'r') as file:
     mcp_servers = json.load(file)
 
 # Load lightweight local embedding model
@@ -12,12 +12,8 @@ model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 tools_data = []
 
 # Loop over each server in the list
-for server_wrapper in mcp_servers:
-    data_list = server_wrapper.get('data', [])
-    
-    for server_entry in data_list:
-        server = server_entry.get('server', {})
-        
+for server in mcp_servers['data']:
+        # server = server_entry.get('server', {})
         vendor_id = server.get('id')
         vendor_name = server.get('name')
         vendor_description = server.get('description', '')
