@@ -1,4 +1,4 @@
-# 🔗 Unified MCP Tool Graph: A Neo4j-Powered API Intelligence Layer for Dynamic Tool Retrieval
+# 🔗 Unified MCP Tool Graph: A Intelligence Layer for Dynamic Tool Retrieval
 
 **Unified MCP Tool Graph** is a research-driven project that aggregates and structures tool APIs from diverse **Model Context Protocol (MCP) servers** into a centralized **Neo4j graph database**. This graph functions as an intelligent infrastructure layer that enables **large language models (LLMs)** and **agentic AI systems** to **dynamically retrieve** the most relevant tools for any task — without being overwhelmed by redundant or confusing options.
 
