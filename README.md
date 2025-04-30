@@ -148,10 +148,13 @@ Let’s build smarter systems — one tool graph at a time.
 🔗 **Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
 
 ## Updates on Development
-1. Created a GraphDB with Vendor and tools with embedings for vector search.
-2. Need a way to categorize vendors and connect vendors with same category. eg( Web Search, File System, Social Media etc.)
-3. No of Tools Supported 11066
-4. No of MCP Servers(Official + Community) 4161
+Clustered on multi label open-ended usecases.
+<img width="1072" alt="image" src="https://github.com/user-attachments/assets/a3744678-8996-42e5-9ebc-8379d29ceedc" />
+
+Created a GraphDB with Vendor and tools with embedings for vector search.
+Need a way to categorize vendors and connect vendors with same category. eg( Web Search, File System, Social Media etc.)
+No of Tools Supported 11066
+No of MCP Servers(Official + Community) 4161
 <img width="973" alt="image" src="https://github.com/user-attachments/assets/b2eab031-bb69-4f0a-be5c-66075fe6d82f" />
 <img width="295" alt="image" src="https://github.com/user-attachments/assets/54210a11-36ea-41e8-987a-b0cfa5b0b56e" />
 
