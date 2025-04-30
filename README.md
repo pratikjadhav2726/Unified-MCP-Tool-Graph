@@ -6,7 +6,7 @@
 
 > 🔬 This repository focuses on the creation and evolution of the **Unified Tool Graph Database**. Chatbot-based integration (e.g., LangChain) is treated as a modular extension of this foundational layer.
 
-> 📢 Code, ingestion scripts, and sample queries coming soon! Stay tuned.
+> 📢 Support for Cline, IDE's coming soon..
 
 ---
 
