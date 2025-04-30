@@ -16,8 +16,9 @@ model = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"), 
             model_name="qwen-qwq-32b"
         )
+config_path="Example_Use/mcp_server_config.json"
 # Load MCP server configuration from JSON file
-def load_mcp_server_config(config_path="Dynamic_tool_retriever_MCP/Testing/mcp_server_config.json"):
+def load_mcp_server_config(config_path="Dynamic_tool_retriever_MCP/Example_Use/mcp_server_config.json"):
     try:
         with open(config_path, "r") as config_file:
             config = json.load(config_file)
@@ -29,13 +30,13 @@ def load_mcp_server_config(config_path="Dynamic_tool_retriever_MCP/Testing/mcp_s
 
 
 async def main():
-    config = load_mcp_server_config("Dynamic_tool_retriever_MCP/Testing/mcp_server_config.json")
+    config = load_mcp_server_config(config_path=config_path)
     async with MultiServerMCPClient(
       config.get("mcpServers")
     )as client:
         tools= client.get_tools()
         agent = create_react_agent(model, client.get_tools())
-        Browser_automation = await agent.ainvoke({"messages": "get tools for go to https://www.google.com'."})
+        Browser_automation = await agent.ainvoke({"messages": "go to https://www.google.com and search for best restaurants in LA'."})
         print(f"Agent response: {Browser_automation}")
 # Run the async main function
 asyncio.run(main())
