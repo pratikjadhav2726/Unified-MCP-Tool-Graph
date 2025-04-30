@@ -44,7 +44,7 @@ async def extract_config_from_github(url):
     raise ValueError("No valid configuration found in GitHub content.")
 
 async def main():
-    url = "https://github.com/awslabs/mcp/tree/main/src/aws-documentation-mcp-server"
+    url = "https://github.com/atla-ai/atla-mcp-server"
     config = await extract_config_from_github(url)
     print(json.dumps(config,indent=4))  # Pretty-print the configuration
 
