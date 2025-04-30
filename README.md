@@ -27,6 +27,7 @@ As LLMs and autonomous agents evolve to interact with external tools and APIs, a
   Most current implementations dump all available tools into the LLM's context, overwhelming it with options and increasing hallucination risks.
 
 ---
+<img width="1072" alt="image" src="https://github.com/user-attachments/assets/a3744678-8996-42e5-9ebc-8379d29ceedc" />
 
 ## ✅ Solution: The Unified MCP Tool Graph
 
