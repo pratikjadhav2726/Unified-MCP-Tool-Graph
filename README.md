@@ -53,6 +53,8 @@ While the graph is the core, it enables powerful downstream use cases:
 
 This prevents LLMs from blindly scanning a massive tool library and instead gives them just what they need to complete the job — nothing more, nothing less.
 
+It spins up requested MCP Servers on demand and disable them when not needed.
+
 ---
 
 ## 🧱 Core Objectives
