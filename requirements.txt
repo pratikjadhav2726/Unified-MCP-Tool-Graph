@@ -1,0 +1,7 @@
+python-dotenv
+aiohttp
+requests
+neo4j
+sentence_transformers
+langchain_mcp_adapters
+pydantic
