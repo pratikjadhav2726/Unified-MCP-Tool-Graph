@@ -160,7 +160,7 @@ No of Tools Supported 11066
 No of MCP Servers(Official + Community) 4161
 <img width="973" alt="image" src="https://github.com/user-attachments/assets/b2eab031-bb69-4f0a-be5c-66075fe6d82f" />
 <img width="295" alt="image" src="https://github.com/user-attachments/assets/54210a11-36ea-41e8-987a-b0cfa5b0b56e" />
-
-
+Query = I want to post a linkedIn post about the latest trends in AI.
+![alt text](image.png)
 
 
