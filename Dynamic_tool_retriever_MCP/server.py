@@ -30,7 +30,7 @@ def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
             "tool_required_parameters": tool.get("required_parameters"),
             "vendor_name": tool.get("vendor_name"),
             "vendor_repo": tool.get("vendor_repository_url"),
-            "required_env_keys": tool.get("vendor_required_env_keys"),
+            # "required_env_keys": tool.get("vendor_required_env_keys"),
             "similarity_score": tool.get("score")  # optional but useful
         })
     

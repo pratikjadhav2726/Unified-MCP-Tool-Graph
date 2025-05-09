@@ -26,7 +26,6 @@ def retrieve_top_k_tools(embedding, top_k=3):
                 node.required_parameters AS required_parameters,
                 vendor.name AS vendor_name,
                 vendor.repository_url AS vendor_repository_url,
-                vendor.required_env_keys AS vendor_required_env_keys,
                 score
             ORDER BY score DESC
             """,

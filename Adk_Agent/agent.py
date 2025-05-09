@@ -8,7 +8,7 @@ from google.adk.artifacts import InMemoryArtifactService
 from google.genai.types import Content, Part
 
 # Initialize the model
-model = LiteLlm(model="groq/qwen-qwq-32b")
+model = LiteLlm(model="bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0")
 
 # Asynchronous function to get tools from the MCP server
 async def get_tools_async():
