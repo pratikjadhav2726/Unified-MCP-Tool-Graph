@@ -161,6 +161,53 @@ No of MCP Servers(Official + Community) 4161
 <img width="973" alt="image" src="https://github.com/user-attachments/assets/b2eab031-bb69-4f0a-be5c-66075fe6d82f" />
 <img width="295" alt="image" src="https://github.com/user-attachments/assets/54210a11-36ea-41e8-987a-b0cfa5b0b56e" />
 #### Query = I want to post a linkedIn post about the latest trends in AI.
-![alt text](image.png)
+```
+Here are the top 5 tools recommended based on your task of creating a LinkedIn post about AI trends, along with brief explanations to help you choose:
+
+---
+
+### 1. **linkedin_post_generator** (Likely the Most Relevant)  
+**Description**: Generates optimized LinkedIn posts with engaging headlines, content structure, and hashtags tailored for professional audiences.  
+**Why Use**: Directly creates polished posts while suggesting multimedia (images, videos) and tone adjustments for maximum engagement.  
+
+---
+
+### 2. **ai_search** (Top Search Tool)  
+**Vendor**: Higress AI-Search  
+**Key Feature**: Aggregates **real-time data** from Google/Bing/Quark and academic sources like ArXiv for cutting-edge AI research and industry trends.  
+**How to Use**:  
+   - Query: `Latest AI trends 2024` → Get recent news, research papers, and opinion pieces.  
+   - Useful for ensuring your post cites fresh, credible sources.  
+
+---
+
+### 3. **tavily-search** (Comprehensive Web Research)  
+**Vendor**: Tavily  
+**Key Feature**: AI-powered search with advanced filters (e.g., `time_range`, `exclude_domains`) to curate content from trusted sources.  
+**How to Use**:  
+   - Example: Search for "recent AI breakthroughs 2024" → Pull articles from tech blogs, IEEE, or MIT Tech Review to highlight in your post.  
+
+---
+
+### 4. **query_repository** (If Curating Open-Source or GitHub Content)  
+**Vendor**: GitHub Chat  
+**Use Case**:  
+   - If your post references open-source projects (e.g., "Top AI tools from GitHub 2024"), use this to query repositories for trending AI-related code/repos.  
+
+---
+
+### 5. **social_media_analytics** (Post-Creation Optimization)  
+**Use Case**:  
+   - After drafting your post, analyze engagement metrics (e.g., "Which AI topics are trending this week?") to refine your draft based on what performs well on LinkedIn.  
+
+---
+
+### Recommended Workflow:  
+1. **Research** using **ai_search** or **tavily-search** to gather the latest AI news and data (e.g., LLM progress, ethical AI debates).  
+2. **Craft the Post** with **linkedin_post_generator** to ensure professional formatting and engagement hooks.  
+3. **Validate** with quick checks via **query_repository** (if citing open-source tools) or **social_media_analytics** for topic popularity.  
+
+Let me know if you'd like step-by-step instructions for any specific tool!
+```
 
 
