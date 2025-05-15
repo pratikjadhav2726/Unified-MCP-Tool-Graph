@@ -5,8 +5,8 @@ import os
 import asyncio
 import json
 from langchain_groq import ChatGroq
+from langgraph.checkpoint.memory import InMemorySaver
 import dotenv
-import pprint
 dotenv.load_dotenv()
 model = ChatGroq(
             temperature=0, 
@@ -19,7 +19,17 @@ class ReactAgent:
         self.config = self.load_config(config_path)
         self.client = None
         self.agent = None
+        self.memory = InMemorySaver()
+    def pretty_print_stream_chunk(self,chunk):
+        for node, updates in chunk.items():
+            print(f"Update from node: {node}")
+            if "messages" in updates:
+                updates["messages"][-1].pretty_print()
+            else:
+                print(updates)
 
+            print("\n")
+        return chunk
     def load_config(self, config_path):
         try:
             with open(config_path, "r") as config_file:
@@ -34,48 +44,22 @@ class ReactAgent:
         await self.client.__aenter__()
         tools = self.client.get_tools()
         prompt= "your task is to break down the user task into sub-tasks and retrieve best tools to solve the task. give just the tools summary and workflow"
-        self.agent = create_react_agent(model,tools=tools,prompt=prompt)
+        self.agent = create_react_agent(model,tools=tools,prompt=prompt,checkpointer=self.memory)
 
     async def process_message(self, message):
-        response = await self.agent.ainvoke({"messages": [{"role": "user", "content": message}]})
+        config = {"configurable": {"thread_id": "1"}}
+        async for chunk in self.agent.astream({"messages": [{"role": "user", "content": message}]},config=config):
         # Extract relevant parts
-        messages = response.get("messages", response)  # fallback if response is a list
-        tool_calls = []
-        tool_responses = []
-        ai_messages = []
-        for msg in messages:
-            # Tool call (AIMessage with tool_calls)
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                tool_calls.extend(msg.tool_calls)
-            # Tool response (ToolMessage)
-            if msg.__class__.__name__ == "ToolMessage":
-                tool_responses.append(msg.content)
-            # AI message (AIMessage with content)
-            if msg.__class__.__name__ == "AIMessage" and msg.content:
-                ai_messages.append(msg.content)
-        return tool_calls, tool_responses, ai_messages
+            self.pretty_print_stream_chunk(chunk)
 
     async def run(self):
-        pp = pprint.PrettyPrinter(indent=2, width=30, compact=True)
+        # pp = pprint.PrettyPrinter(indent=2, width=30, compact=True)
         await self.initialize_client()
         while True:
             user_input = input("Enter your message (or 'exit' to quit): ")
             if user_input.lower() == 'exit':
                 break
-            tool_calls, tool_responses, ai_messages = await self.process_message(user_input)
-            if tool_calls:
-                print("Tool Calls:")
-                for call in tool_calls:
-                    pp.pprint(call)
-                    # prettyprint(call)
-            if tool_responses:
-                print("Tool Responses:")
-                for resp in tool_responses:
-                    pp.pprint(resp)
-            if ai_messages:
-                print("AI Messages:")
-                for msg in ai_messages:
-                    print(msg)
+            ai_messages = await self.process_message(user_input)
         await self.client.__aexit__(None, None, None)
 
 if __name__ == "__main__":
