@@ -1,4 +1,4 @@
-# 🔗 Unified MCP Tool Graph: A Intelligence Layer for Dynamic Tool Retrieval
+# Unified MCP Tool Graph: A Intelligence Layer for Dynamic Tool Retrieval
 
 ![UnifiedMCPToolGraph](https://github.com/user-attachments/assets/1ac65df1-3c0d-44a8-96c4-efc0b1352b6c)
 
@@ -14,20 +14,20 @@
 
 ---
 
-## 🧠 Research Problem
+## Research Problem
 
 As LLMs and autonomous agents evolve to interact with external tools and APIs, a critical bottleneck has emerged:
 
 > **How can models efficiently select the right tool from an ever-expanding universe of APIs — without going into infinite loops or picking the wrong ones?**
 
 ### Why This Happens:
-- 🔀 **Tool Confusion:**  
+- **Tool Confusion:**  
   LLMs struggle when many tools offer similar functions (e.g., `create_post`, `schedule_post`, `post_to_social`), leading to indecision and incorrect tool calls.
   
 - ↺ **Infinite Chains:**  
   Without a structured understanding of tool differences, LLMs often get stuck in unproductive chains, calling tools repetitively or selecting suboptimal ones.
 
-- 🧱 **Unstructured Access:**  
+- **Unstructured Access:**  
   Most current implementations dump all available tools into the LLM's context, overwhelming it with options and increasing hallucination risks.
 
 ---
@@ -49,11 +49,11 @@ This project proposes a structured, queryable solution: a **vendor-agnostic Neo4
 
 ---
 
-## 🧹 Modular Extensions
+## Modular Extensions
 
 While the graph is the core, it enables powerful downstream use cases:
 
-### 🌐 Dynamic Tool Retrieval (DTR):
+### Dynamic Tool Retrieval (DTR):
 > A modular LangChain/Autogen chatbot extension that queries the graph and surfaces a minimal, accurate toolset for any given user intent.
 
 This prevents LLMs from blindly scanning a massive tool library and instead gives them just what they need to complete the job — nothing more, nothing less.
@@ -62,38 +62,38 @@ It spins up requested MCP Servers on demand and disable them when not needed.
 
 ---
 
-## 🧱 Core Objectives
+## Core Objectives
 
 | Goal | Description |
 |------|-------------|
-| **📦 Tool Ingestion** | Fetch APIs and schemas from public/private MCP servers and normalize them |
-| **🧽 Tool Relationship Mapping** | Define graph edges like `overlaps_with`, `requires_auth`, `preferred_for`, `belongs_to_vendor` |
-| **🔍 LLM-Oriented Queries** | Return task-specific tool bundles in real time |
-| **🌱 Scalable Ecosystem** | Continuously add vendors and tools without retraining or hardcoding |
-| **🔗 Agent-Aware Structure** | Guide LLM reasoning with metadata-rich, searchable tool representations |
+| **Tool Ingestion** | Fetch APIs and schemas from public/private MCP servers and normalize them |
+| **Tool Relationship Mapping** | Define graph edges like `overlaps_with`, `requires_auth`, `preferred_for`, `belongs_to_vendor` |
+| **LLM-Oriented Queries** | Return task-specific tool bundles in real time |
+| **Scalable Ecosystem** | Continuously add vendors and tools without retraining or hardcoding |
+| **Agent-Aware Structure** | Guide LLM reasoning with metadata-rich, searchable tool representations |
 
 ---
 
-## 🌟 Key Advantages
+## Key Advantages
 
-- 🧠 **Reduces Tool Confusion in LLMs**  
+- **Reduces Tool Confusion in LLMs**  
   Prevents tool overload by showing only task-relevant options. Avoids infinite call loops and incorrect tool selections.
 
-- ↻ **Vendor-Agnostic Integration**  
+- **Vendor-Agnostic Integration**  
   Unifies APIs from different providers into a single intelligent system.
 
-- 🔗 **Maps Interoperability**  
+- **Maps Interoperability**  
   Captures how tools relate or depend on each other, useful for chaining APIs in workflows.
 
-- ⚡ **Optimized Agentic Reasoning**  
+- **Optimized Agentic Reasoning**  
   Empowers LLMs to reason efficiently with fewer distractions in the context window.
 
-- 🚀 **Scalable & Modular**  
+- **Scalable & Modular**  
   Can be updated independently of LLM or chatbot infrastructure. Extendable across any agent stack.
 
 ---
 
-## 📌 Example Use Cases
+## Example Use Cases
 
 - **"I want to schedule a post on LinkedIn and share it in Slack."**  
   → Graph returns only the relevant `create_post`, `schedule_post`, and `send_message` tools.
@@ -104,6 +104,7 @@ It spins up requested MCP Servers on demand and disable them when not needed.
 - **Smart Recommender Agents:**  
   Suggest best-matched tools based on tags, popularity, success rate, or dependencies.
 
+**Integrations with LangGraph and ADK are available in the `Example_Agents` directory for streamlined agent workflows and dynamic tool orchestration.**
 ---
 
 ## 🧪 Coming Soon
@@ -116,7 +117,7 @@ It spins up requested MCP Servers on demand and disable them when not needed.
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ```bash
 git clone https://github.com/your-username/unified-mcp-tool-graph.git
@@ -126,23 +127,23 @@ cd unified-mcp-tool-graph
 
 ---
 
-## 🙌 Contributing
+## Contributing
 
 If you’re passionate about agentic AI, graph databases, or LLM integration — we’d love your help!
 
-- 🧠 Submit ideas or vendor sources
-- 🛠️ Open PRs for schema/design improvements
-- ⭐ Star the repo to support this research
+- Submit ideas or vendor sources
+- Open PRs for schema/design improvements
+- Star the repo to support this research
 
 ---
 
-## 📜 License
+## License
 
 MIT License — free for academic, personal, and commercial use.
 
 ---
 
-## 🧠 Summary
+## Summary
 
 Instead of dumping 100+ tools into a model’s prompt and expecting it to choose wisely, the **Unified MCP Tool Graph** equips your LLM with structure, clarity, and relevance.
 
@@ -152,7 +153,7 @@ Let’s build smarter systems — one tool graph at a time.
 
 ---
 
-🔗 **Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
+**Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
 
 ## Updates on Development
 Clustered on multi label open-ended usecases.
