@@ -63,6 +63,6 @@ class ReactAgent:
         await self.client.__aexit__(None, None, None)
 
 if __name__ == "__main__":
-    config_path = "Example_Use/mcp_server_config.json"
+    config_path = "Example_Agents/Langgraph/mcp_server_config.json"
     agent = ReactAgent(config_path)
     asyncio.run(agent.run())
