@@ -107,13 +107,13 @@ It spins up requested MCP Servers on demand and disable them when not needed.
 **Integrations with LangGraph and ADK are available in the `Example_Agents` directory for streamlined agent workflows and dynamic tool orchestration.**
 ---
 
-## 🧪 Coming Soon
+## Coming Soon
 
-- ✅ **Graph Ingestion Scripts**
-- ✅ **Schema Blueprint + Cypher Queries**
-- ✅ **Tool Visualization Playground**
-- ✅ **LangChain DTR Chatbot Plug-in**
-- ✅ **How-to Tutorials & Use Cases**
+- **Graph Ingestion Scripts**
+- **Schema Blueprint + Cypher Queries**
+- **Tool Visualization Playground**
+- **LangChain DTR Chatbot Plug-in**
+- **How-to Tutorials & Use Cases**
 
 ---
 
@@ -156,13 +156,16 @@ Let’s build smarter systems — one tool graph at a time.
 **Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
 
 ## Updates on Development
-Clustered on multi label open-ended usecases.
+#### Clustering on multi label open-ended usecases.
+
 <img width="1072" alt="image" src="https://github.com/user-attachments/assets/a3744678-8996-42e5-9ebc-8379d29ceedc" />
 
-Created a GraphDB with Vendor and tools with embedings for vector search.
+****Created a GraphDB with Vendor and tools with embedings for vector search.
 Need a way to categorize vendors and connect vendors with same category. eg( Web Search, File System, Social Media etc.)
 No of Tools Supported 11066
-No of MCP Servers(Official + Community) 4161
+No of MCP Servers(Official + Community) 4161****
+
+
 <img width="973" alt="image" src="https://github.com/user-attachments/assets/b2eab031-bb69-4f0a-be5c-66075fe6d82f" />
 <img width="295" alt="image" src="https://github.com/user-attachments/assets/54210a11-36ea-41e8-987a-b0cfa5b0b56e" />
 #### Query = I want to post a linkedIn post about the latest trends in AI.
