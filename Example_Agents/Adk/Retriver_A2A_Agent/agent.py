@@ -6,6 +6,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.artifacts import InMemoryArtifactService
 from google.genai.types import Content, Part
+# from Retriver_A2A_Agent.MCP_config_agent.agent import root_agent
+from Utils.get_MCP_config import extract_config_from_github
 
 # Initialize the model
 model = LiteLlm(model="bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0")
@@ -23,12 +25,14 @@ async def get_tools_async():
 # Asynchronous function to create the agent
 async def create_agent():
     tools, exit_stack = await get_tools_async()
+    # tools.append(extract_config_from_github)
     agent = Agent(
         name="retriver_Agent",
         model=model,
         description="Retrives best tools for a given task description",
-        instruction="find top 5 tools for the given task description",
+        instruction="find top 5 tools for the given task description. Summarize the flow of tools to solve the task",
         tools=tools,
+        # sub_agents=[root_agent]
     )
     return agent, exit_stack
 
@@ -69,7 +73,7 @@ async def async_main():
     )
 
     async for event in events_async:
-        print(f"Event: {event.actions}")
+        print(f"Event: {event}")
         if event.is_final_response():
             if event.content and event.content.parts:
                 final_response_text = event.content.parts[0].text

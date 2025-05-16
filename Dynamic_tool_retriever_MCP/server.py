@@ -8,11 +8,11 @@ mcp = FastMCP("DynamicToolRetrieverMCP")
 
 class DynamicRetrieverInput(BaseModel):
     task_description: str
-    top_k: int = 3  # default top k tools to retrieve
+    top_k: int # default top k tools to retrieve
 
 @mcp.tool()
 def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
-    """Retrieve top-k relevant tools for a user task description."""
+    """Retrieve top-k relevant tools info for a user task description."""
     
     # Step 1: Embed the task description
     query_embedding = embed_text(input.task_description)

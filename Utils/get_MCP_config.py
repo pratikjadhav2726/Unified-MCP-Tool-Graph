@@ -3,7 +3,7 @@ import aiohttp
 import json
 import asyncio
 
-async def fetch_github_page(url):
+def fetch_github_page(url):
     """Fetch the content of a GitHub page."""
     if not url.endswith("/"):
         url += "/"
@@ -21,15 +21,15 @@ async def fetch_github_page(url):
 
     # Construct raw URL to README.md
     url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/README.md"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
+    with aiohttp.ClientSession() as session:
+        with session.get(url) as response:
             if response.status != 200:
                 raise Exception(f"Failed to fetch GitHub page: {url}")
-            return await response.text()
+            return response.text()
 
-async def extract_config_from_github(url):
+def extract_config_from_github(url):
     """Extract MCP server or installation config using regex."""
-    content = await fetch_github_page(url)
+    content = fetch_github_page(url)
     config_match = re.search(r'(```json\s*({\s*"mcpServers".*?})\s*```)', content, re.DOTALL)
     if config_match:
         try:
@@ -43,10 +43,10 @@ async def extract_config_from_github(url):
             raise ValueError("Failed to decode JSON from GitHub content.")
     raise ValueError("No valid configuration found in GitHub content.")
 
-async def main():
-    url = "https://github.com/atla-ai/atla-mcp-server"
-    config = await extract_config_from_github(url)
-    print(json.dumps(config,indent=4))  # Pretty-print the configuration
+# async def main():
+#     url = "https://github.com/atla-ai/atla-mcp-server"
+#     config = await extract_config_from_github(url)
+#     print(json.dumps(config,indent=4))  # Pretty-print the configuration
 
 # Run the async main function
-asyncio.run(main())
+# asyncio.run(main())
