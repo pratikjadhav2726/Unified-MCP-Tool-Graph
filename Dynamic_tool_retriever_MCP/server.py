@@ -37,4 +37,4 @@ def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
     return response
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run(transport="sse")
