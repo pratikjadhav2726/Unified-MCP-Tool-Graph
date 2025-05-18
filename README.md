@@ -1,6 +1,7 @@
 # Unified MCP Tool Graph: A Intelligence Layer for Dynamic Tool Retrieval
 
-![UnifiedMCPToolGraph](https://github.com/user-attachments/assets/1ac65df1-3c0d-44a8-96c4-efc0b1352b6c)
+ ![image](https://github.com/user-attachments/assets/31dedcf0-b66b-49df-95d6-69e36a9115f9)
+
 
 
 
@@ -165,9 +166,7 @@ Need a way to categorize vendors and connect vendors with same category. eg( Web
 No of Tools Supported 11066
 No of MCP Servers(Official + Community) 4161****
 
-
-<img width="973" alt="image" src="https://github.com/user-attachments/assets/b2eab031-bb69-4f0a-be5c-66075fe6d82f" />
-<img width="295" alt="image" src="https://github.com/user-attachments/assets/54210a11-36ea-41e8-987a-b0cfa5b0b56e" />
+![UnifiedMCPToolGraph](https://github.com/user-attachments/assets/1ac65df1-3c0d-44a8-96c4-efc0b1352b6c)
 
 
 
