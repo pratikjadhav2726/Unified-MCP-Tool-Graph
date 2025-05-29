@@ -1,11 +1,21 @@
 
+
 import re
 import aiohttp
 import json
 import asyncio
 
 async def fetch_github_page_async(url):
-    """Fetch the content of a GitHub page asynchronously."""
+    """
+    Fetch the content of a GitHub page's README.md asynchronously.
+    Args:
+        url (str): The GitHub repository URL.
+    Returns:
+        str: The content of the README.md file.
+    Raises:
+        ValueError: If the URL is invalid.
+        Exception: If the README cannot be fetched.
+    """
     if not url.endswith("/"):
         url += "/"
 
@@ -31,14 +41,26 @@ async def fetch_github_page_async(url):
                     raise Exception(f"Failed to fetch GitHub page: {raw_url} (status {response.status})")
                 return await response.text()
     except Exception as e:
+        # Log and re-raise for upstream error handling
+        print(f"[ERROR] Error fetching GitHub README: {e}")
         raise Exception(f"Error fetching GitHub README: {e}")
 
 
+
 async def extract_config_from_github_async(url):
-    """Extract MCP server or installation config using regex from a GitHub repo's README.md asynchronously."""
+    """
+    Extract MCP server or installation config using regex from a GitHub repo's README.md asynchronously.
+    Args:
+        url (str): The GitHub repository URL.
+    Returns:
+        dict: The parsed MCP server config if found.
+    Raises:
+        Exception: If the README cannot be fetched or config cannot be parsed.
+    """
     try:
         content = await fetch_github_page_async(url)
     except Exception as e:
+        print(f"[ERROR] Failed to fetch README for config extraction: {e}")
         raise Exception(f"Failed to fetch README for config extraction: {e}")
 
     config_match = re.search(r'```json\s*({\s*"mcpServers".*?})\s*```', content, re.DOTALL)
@@ -49,19 +71,22 @@ async def extract_config_from_github_async(url):
             cleaned_json_string = re.sub(r',\s*([}\]])', r'\1', config_str)
             config = json.loads(cleaned_json_string)
             return config
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] Failed to decode JSON from GitHub content: {e}")
             raise ValueError("Failed to decode JSON from GitHub content.")
+    print(f"[WARN] No valid configuration found in GitHub content for {url}")
     raise ValueError("No valid configuration found in GitHub content.")
 
 
+
 # Example usage for testing
-# async def main():
-#     url = "https://github.com/atla-ai/atla-mcp-server"
-#     try:
-#         config = await extract_config_from_github_async(url)
-#         print(json.dumps(config, indent=4))
-#     except Exception as e:
-#         print(f"Error: {e}")
-#
-# if __name__ == "__main__":
-#     asyncio.run(main())
+if __name__ == "__main__":
+    async def main():
+        """Test the config extraction utility with error handling."""
+        url = "https://github.com/atla-ai/atla-mcp-server"
+        try:
+            config = await extract_config_from_github_async(url)
+            print(json.dumps(config, indent=4))
+        except Exception as e:
+            print(f"[TEST ERROR] {e}")
+    asyncio.run(main())
