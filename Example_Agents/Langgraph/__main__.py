@@ -12,7 +12,7 @@ Environment variables, particularly `GROQ_API_KEY`, are crucial for its operatio
 import logging
 import os
 import click
-from .agent import ReactAgent
+from .Agent import ReactAgent
 from .task_manager import AgentTaskManager
 from common.server import A2AServer
 from common.types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError

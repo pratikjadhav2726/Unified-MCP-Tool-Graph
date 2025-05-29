@@ -12,7 +12,7 @@ import logging
 import traceback
 from collections.abc import AsyncIterable
 
-from .agent import ReactAgent
+from .Agent import ReactAgent
 from common.server import utils
 from common.server.task_manager import InMemoryTaskManager
 from common.types import (
