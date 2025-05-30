@@ -1,9 +1,10 @@
-
-
 import re
 import aiohttp
 import json
 import asyncio
+import os
+import dotenv
+dotenv.load_dotenv()  # Load environment variables from .env file
 
 async def fetch_github_page_async(url):
     """
@@ -79,13 +80,47 @@ async def extract_config_from_github_async(url):
 
 
 
+def inject_env_keys(mcp_config):
+    """
+    Inject environment variable values into the MCP config dictionary.
+    Args:
+        mcp_config (dict): The MCP config dictionary.
+    Returns:
+        dict: The MCP config with environment variables injected.
+    """
+    if not isinstance(mcp_config, dict):
+        print("[ERROR] MCP config is not a dictionary.")
+        return mcp_config
+    mcp_servers = mcp_config.get("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        print("[ERROR] 'mcpServers' is not a dictionary in MCP config.")
+        return mcp_config
+    for server, cfg in mcp_servers.items():
+        if not isinstance(cfg, dict):
+            print(f"[WARN] Config for server '{server}' is not a dictionary.")
+            continue
+        env_dict = cfg.get("env", {})
+        if not isinstance(env_dict, dict):
+            print(f"[WARN] 'env' for server '{server}' is not a dictionary.")
+            continue
+        for key in env_dict:
+            env_val = os.getenv(key)
+            if env_val:
+                env_dict[key] = env_val
+            else:
+                print(f"[WARN] Environment variable '{key}' not found for server '{server}'. Using default or placeholder.")
+    return mcp_config
+
+
+
 # Example usage for testing
 if __name__ == "__main__":
     async def main():
         """Test the config extraction utility with error handling."""
-        url = "https://github.com/atla-ai/atla-mcp-server"
+        url = "https://github.com/tavily-ai/tavily-mcp"
         try:
             config = await extract_config_from_github_async(url)
+            config = inject_env_keys(config)
             print(json.dumps(config, indent=4))
         except Exception as e:
             print(f"[TEST ERROR] {e}")
