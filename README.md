@@ -5,9 +5,32 @@
 
 
 
+
 **Unified MCP Tool Graph** is a research-driven project that aggregates and structures tool APIs from diverse **Model Context Protocol (MCP) servers** into a centralized **Neo4j graph database**. This graph functions as an intelligent infrastructure layer that enables **large language models (LLMs)** and **agentic AI systems** to **dynamically retrieve** the most relevant tools for any task — without being overwhelmed by redundant or confusing options.
 
-**Single MCP for connecting to all MCP's available**
+---
+
+## 🚀 Recent Updates: Dynamic MCP Server Spin-Up & Minimal Tool Context
+
+### 🟢 Dynamic MCP Server Orchestration
+- The system now **spins up only the MCP servers required for a given user query**. Five popular MCP servers (including the Dynamic Tool Retriever MCP) are kept warm by default; others are started on demand and kept alive for 10 minutes after last use.
+- **Dynamic Tool Retriever MCP** returns not just tool metadata, but also the config needed to run/connect to the MCP server for each tool (fetched from the vendor's GitHub README automatically).
+- **Automatic MCP Config Extraction:** Uses the vendor's GitHub repo to extract the MCP server config (from README) for each tool, so agents can spin up/connect to the right server on the fly.
+- **Error Handling:** If config extraction fails, the system logs a warning and continues, ensuring robust tool retrieval.
+
+### 🟢 Minimal Tool Context for LLMs/Agents
+- **Only the exact tools required for the user query are loaded into the agent's context** (not all tools from all MCP servers). This prevents LLM confusion and infinite tool loops.
+- **End-to-End Flow:**
+    1. User query is received.
+    2. Dynamic Tool Retriever MCP queries the Neo4j graph and returns the top relevant tools **plus their MCP server configs**.
+    3. The agent spins up/connects to only the required MCP servers (using the configs), and loads only the retrieved tools.
+    4. The agent executes the workflow and returns the answer.
+
+### 🟢 A2A and LangGraph Agent Support
+- **A2A Agent Example:** See `Example_Agents/A2A_DynamicToolAgent/` for a fully dynamic A2A agent that orchestrates MCP servers and tools per request.
+- **LangGraph Example:** See `Example_Agents/Langgraph/` for a LangGraph agent using the same dynamic, minimal-tool approach.
+
+---
 
 > 🔬 This repository focuses on the creation and evolution of the **Unified Tool Graph Database**. Chatbot-based integration (e.g., LangChain) is treated as a modular extension of this foundational layer.
 
@@ -59,7 +82,11 @@ While the graph is the core, it enables powerful downstream use cases:
 
 This prevents LLMs from blindly scanning a massive tool library and instead gives them just what they need to complete the job — nothing more, nothing less.
 
-It spins up requested MCP Servers on demand and disable them when not needed.
+
+**Key Implementation:**
+- MCP servers are spun up on demand (using configs from the tool retriever MCP and GitHub), and shut down after inactivity.
+- Only the 5 most popular MCPs are kept running at all times; others are ephemeral.
+- Agents (A2A or LangGraph) only see the tools relevant to the current query, not the full universe of tools.
 
 ---
 
@@ -105,7 +132,19 @@ It spins up requested MCP Servers on demand and disable them when not needed.
 - **Smart Recommender Agents:**  
   Suggest best-matched tools based on tags, popularity, success rate, or dependencies.
 
-**Integrations with LangGraph and ADK are available in the `Example_Agents` directory for streamlined agent workflows and dynamic tool orchestration.**
+**Integrations with LangGraph and A2A are available in the `Example_Agents` directory for streamlined agent workflows and dynamic tool orchestration.**
+
+---
+
+## 🛠️ How It Works (Summary)
+
+1. **User submits a query** (e.g., "Schedule a LinkedIn post and share it in Slack.")
+2. **Dynamic Tool Retriever MCP** queries the Neo4j graph and returns the most relevant tools **plus their MCP server configs** (fetched from GitHub if needed).
+3. **MCP Server Manager** spins up/connects to only the required MCP servers (using the configs), and keeps them alive for 10 minutes after last use.
+4. **Agent** (A2A or LangGraph) loads only the retrieved tools and executes the workflow.
+5. **Result** is returned to the user, with minimal tool confusion and maximum efficiency.
+
+---
 ---
 
 ## Coming Soon

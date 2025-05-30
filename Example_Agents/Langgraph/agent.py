@@ -74,17 +74,27 @@ class ReactAgent:
 
     def load_config(self, config_path: str) -> dict:
         """
-        Loads agent configuration from a JSON file.
+        Loads agent configuration from a JSON file with error handling.
 
         Args:
             config_path: Path to the configuration file.
 
         Returns:
             A dictionary containing the loaded configuration.
+        Raises:
+            FileNotFoundError: If the config file does not exist.
+            json.JSONDecodeError: If the config file is not valid JSON.
         """
         print(f"Loading config from {config_path}")
-        with open(config_path, "r") as config_file:
-            return json.load(config_file)
+        try:
+            with open(config_path, "r") as config_file:
+                return json.load(config_file)
+        except FileNotFoundError as e:
+            print(f"[ERROR] Config file not found: {e}")
+            raise
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] Failed to decode config JSON: {e}")
+            raise
 
     def sync_initialize_client(self):
         """
@@ -127,11 +137,12 @@ class ReactAgent:
             `get_agent_response`.
         """
         config = {"configurable": {"thread_id": sessionId}}
-        # Note: The result of self.agent.invoke is usually the final state,
-        # but here it seems the primary goal is to update the state,
-        # and then fetch the response using get_agent_response.
-        self.agent.invoke({"messages": [("user", query)]}, config)
-        return self.get_agent_response(config)
+        try:
+            self.agent.invoke({"messages": [("user", query)]}, config)
+            return self.get_agent_response(config)
+        except Exception as e:
+            print(f"[ERROR] Agent invocation failed: {e}")
+            return {"is_task_complete": False, "require_user_input": True, "content": str(e)}
 
     async def stream(self, query: str, sessionId: str) -> AsyncIterable[dict[str, Any]]:
         """
