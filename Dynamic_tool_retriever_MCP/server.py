@@ -7,6 +7,10 @@ It utilizes text embeddings for the task description and pre-indexed tool descri
 in the database.
 """
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 

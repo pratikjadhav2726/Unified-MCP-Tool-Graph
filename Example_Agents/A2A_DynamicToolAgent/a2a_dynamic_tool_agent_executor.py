@@ -91,3 +91,11 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
                 'require_user_input': False,
                 'content': result["messages"][-1].content if "messages" in result and result["messages"] else "",
             })
+
+    async def cancel(self, request: RequestContext, event_queue: EventQueue) -> None:
+        """Cancel a running task. (Not implemented)"""
+        # You can implement actual cancellation logic here if needed.
+        # For now, raise unsupported operation to match Langgraph pattern.
+        from a2a.types import UnsupportedOperationError
+        from a2a.utils.errors import ServerError
+        raise ServerError(error=UnsupportedOperationError())
