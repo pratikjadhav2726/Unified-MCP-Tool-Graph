@@ -43,6 +43,9 @@ class ReactAgent:
     SYSTEM_INSTRUCTION = (
         "You are an agent that decomposes the user's task into sub-tasks and retrieves the best tools to solve it. "
         "Give just the tools summary and workflow."
+         'Set response status to input_required if the user needs to provide more information.'
+        'Set response status to error if there is an error while processing the request.'
+        'Set response status to completed if the request is complete.'
     )
     """Default system instruction provided to the language model."""
 
@@ -96,33 +99,33 @@ class ReactAgent:
             print(f"[ERROR] Failed to decode config JSON: {e}")
             raise
 
-    def sync_initialize_client(self):
+    async def __aenter__(self):
         """
-        Synchronous wrapper for `initialize_client`.
-        Useful for scenarios where async operations need to be run from sync code.
-        """
-        asyncio.run(self.initialize_client())
-
-    async def initialize_client(self):
-        """
-        Asynchronously initializes the MCP client and the LangGraph agent.
-
-        This method:
-        1. Creates a `MultiServerMCPClient` instance using server configurations
-           from the loaded config.
-        2. Asynchronously enters the client's context (e.g., establishing connections).
-        3. Retrieves available tools from the MCP client.
-        4. Creates the ReAct agent using `create_react_agent` from LangGraph,
-           configuring it with the model, retrieved tools, system instruction,
-           and memory checkpointer.
+        Async context manager entry: initializes MCP client and agent, keeps connection open for agent lifetime.
         """
         self.client = MultiServerMCPClient(self.config.get("mcpServers"))
         await self.client.__aenter__()
         tools = self.client.get_tools()
+        print("[DEBUG] Loaded tools:", [(t.name, type(t)) for t in tools])  # Debug print
         self.agent = create_react_agent(
             self.model, tools=tools, prompt=self.SYSTEM_INSTRUCTION, # type: ignore
             checkpointer=self.memory
         )
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        """
+        Async context manager exit: closes MCP client connection.
+        """
+        if self.client:
+            await self.client.__aexit__(exc_type, exc, tb)
+        self.client = None
+        self.agent = None
+
+    # Deprecated: keep for backward compatibility, but warn users
+    async def initialize_client(self):
+        print("[WARNING] initialize_client is deprecated. Use 'async with ReactAgent(...) as agent:' instead.")
+        await self.__aenter__()
 
     def invoke(self, query: str, sessionId: str) -> dict:
         """
@@ -159,18 +162,51 @@ class ReactAgent:
             Dictionaries representing events or messages from the agent's stream.
             Each dictionary includes:
             - 'is_task_complete' (bool): Indicates if the task is considered complete.
-                                        (Currently hardcoded to True, may need refinement)
             - 'require_user_input' (bool): Indicates if user input is required.
-                                           (Currently hardcoded to False)
             - 'content' (str): The content of the latest message in the stream.
         """
         inputs = {'messages': [('user', query)]}
         config = {'configurable': {'thread_id': sessionId}}
         async for item in self.agent.astream(inputs, config=config):
+            print("[DEBUG] LangGraph agent stream item:", item)  # Debug print
+
+            # Check for structured/tool response
+            agent_state = item.get('agent') if isinstance(item, dict) else None
+            # Fix: agent_state.values is a method, not a dict. Use agent_state.values if it's a dict, else getattr
+            structured_response = None
+            if agent_state:
+                values = getattr(agent_state, 'values', None)
+                if isinstance(values, dict):
+                    structured_response = values.get('structured_response')
+            if structured_response:
+                if hasattr(structured_response, 'dict'):
+                    structured_response = structured_response.dict()
+                status = structured_response.get('status', 'completed')
+                message = structured_response.get('message', '')
+                yield {
+                    'is_task_complete': status == 'completed',
+                    'require_user_input': status == 'input_required',
+                    'content': message,
+                }
+                if status == 'completed':
+                    break
+                continue
+
+            # Fallback: extract last message content
+            if agent_state and isinstance(agent_state, dict) and 'messages' in agent_state:
+                messages = agent_state['messages']
+                content = getattr(messages[-1], 'content', str(messages[-1])) if messages else ''
+            elif 'messages' in item and item['messages']:
+                messages = item['messages']
+                content = getattr(messages[-1], 'content', str(messages[-1]))
+            elif 'content' in item:
+                content = item['content']
+            else:
+                content = ''
             yield {
-                'is_task_complete': True,  # Or make this smarter if you want partial results
+                'is_task_complete': False,
                 'require_user_input': False,
-                'content': item["messages"][-1].content if "messages" in item and item["messages"] else "",
+                'content': content,
             }
 
     def get_agent_response(self, config: dict) -> dict:
@@ -189,16 +225,29 @@ class ReactAgent:
             - "content" (str): The content of the last message, or an error message.
         """
         state = self.agent.get_state(config)
+        # Try to extract a structured/tool response if present
+        structured_response = state.values.get('structured_response')
+        if structured_response:
+            if hasattr(structured_response, 'dict'):
+                structured_response = structured_response.dict()
+            status = structured_response.get('status', 'completed')
+            message = structured_response.get('message', '')
+            return {
+                'is_task_complete': status == 'completed',
+                'require_user_input': status == 'input_required',
+                'content': message,
+            }
+        # Fallback: extract last message content
         messages = state.values.get("messages", [])
         if messages:
             last_msg = messages[-1]
             return {
-                "is_task_complete": True, # Assuming task is complete if there's a final message
+                "is_task_complete": True,
                 "require_user_input": False,
                 "content": getattr(last_msg, "content", str(last_msg))
             }
         return {
-            "is_task_complete": False, # No message, so task is not considered complete
-            "require_user_input": True, # Likely needs input or something went wrong
+            "is_task_complete": False,
+            "require_user_input": True,
             "content": "Unable to process your request at the moment."
         }

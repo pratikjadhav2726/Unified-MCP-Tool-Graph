@@ -30,7 +30,7 @@ class MissingAPIKeyError(Exception):
 @click.command()
 @click.option('--host', 'host', default='localhost')
 @click.option('--port', 'port', default=10000)
-@click.option('--config', 'config_path', default='config.json', help='Path to MCP config JSON')
+@click.option('--config', 'config_path', default='Example_Agents/Langgraph/mcp_server_config.json', help='Path to MCP config JSON')
 def main(host, port, config_path):
     """Starts the Dynamic Tool Agent server."""
     try:

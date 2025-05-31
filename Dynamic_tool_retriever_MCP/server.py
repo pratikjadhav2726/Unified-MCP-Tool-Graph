@@ -35,7 +35,7 @@ class DynamicRetrieverInput(BaseModel):
     """The maximum number of relevant tools to retrieve. Defaults to 3 in the retriever if not specified otherwise by a similar parameter in the retriever function."""
 
 @mcp.tool()
-def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
+async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
     """
     Retrieves the top-k most relevant tools for a given user task description.
 
@@ -62,16 +62,13 @@ def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
         - "similarity_score" (float): The similarity score between the task
                                       description and the tool description.
     """
-    
+    print(f"[INFO] Received task description: {input.task_description}")
     # Step 1: Embed the task description
     query_embedding = embed_text(input.task_description)
-    
     # Step 2: Query Neo4j to retrieve top-k similar tools
     retrieved_tools = retrieve_top_k_tools(query_embedding, input.top_k)
-    
+    print("Retrieved tools:", retrieved_tools)
 
-    # Step 3: Prepare the cleaned, final response with MCP config
-    response = []
     async def get_tool_with_config(tool):
         vendor_repo = tool.get("vendor_repository_url")
         mcp_server_config = None
@@ -93,18 +90,9 @@ def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
             "mcp_server_config": mcp_server_config
         }
 
-    async def build_response():
-        tasks = [get_tool_with_config(tool) for tool in retrieved_tools]
-        return await asyncio.gather(*tasks)
-
-    # Run the async config fetcher in the current event loop
+    tasks = [get_tool_with_config(tool) for tool in retrieved_tools]
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    try:
-        response = loop.run_until_complete(build_response())
+        response = await asyncio.gather(*tasks)
     except Exception as e:
         print(f"[ERROR] Failed to build tool response with configs: {e}")
         # fallback: return tools without configs
