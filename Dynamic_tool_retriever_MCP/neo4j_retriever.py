@@ -23,7 +23,7 @@ driver = GraphDatabase.driver(
 )
 
 # Retrieval function
-def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: bool = False) -> list[dict]:
+def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: bool = False, official_boost: float = 1.2) -> list[dict]:
     """
     Retrieves the top K tools from the Neo4j database based on the similarity
     of their embeddings to the provided query embedding.
@@ -34,6 +34,7 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: 
         embedding: A list of floats representing the query embedding.
         top_k: The number of top similar tools to retrieve. Defaults to 3.
         official_only: If set to True, restricts the results to only official tools/servers.
+        official_boost: A boost factor for the similarity score of official tools/servers. Defaults to 1.2.
 
     Returns:
         A list of dictionaries, where each dictionary represents a tool
@@ -50,15 +51,17 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: 
     """
     with driver.session() as session:
         cypher = """
-        WITH $embedding AS queryEmbedding
+        WITH $embedding AS queryEmbedding, $officialBoost AS boost
         CALL db.index.vector.queryNodes('tool_vector_index', $topK, queryEmbedding)
-        YIELD node, score
+        YIELD node, score AS base_score
         MATCH (node)-[:BELONGS_TO_VENDOR]->(vendor:Vendor)
         WHERE (node.disabled IS NULL OR node.disabled = false)
         """
         if official_only:
             cypher += " AND (vendor.is_official = true OR node.is_official = true)"
         cypher += """
+        WITH node, vendor, base_score,
+             CASE WHEN (vendor.is_official = true OR node.is_official = true) THEN base_score * boost ELSE base_score END AS score
         RETURN 
             node.name AS tool_name,
             node.description AS tool_description,
@@ -72,6 +75,7 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: 
         result = session.run(
             cypher,
             embedding=embedding,
-            topK=top_k
+            topK=top_k,
+            officialBoost=official_boost
         )
         return [record.data() for record in result]
