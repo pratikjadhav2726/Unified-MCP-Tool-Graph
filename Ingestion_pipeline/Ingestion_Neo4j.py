@@ -29,7 +29,8 @@ MERGE (t:Tool {name: $tool_name, vendor_id: $vendor_id})
 SET t.description = $tool_description,
     t.input_parameters = $tool_parameters,
     t.required_parameters = $tool_required_parameters,
-    t.embedding = $tool_embedding
+    t.embedding = $tool_embedding,
+    t.disabled = false
 """
 
 CREATE_RELATIONSHIP_QUERY = """

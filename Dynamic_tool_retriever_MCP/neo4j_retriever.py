@@ -54,6 +54,7 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3) -> list[dict]:
             CALL db.index.vector.queryNodes('tool_vector_index', $topK, queryEmbedding)
             YIELD node, score
             MATCH (node)-[:BELONGS_TO_VENDOR]->(vendor:Vendor)
+            WHERE node.disabled IS NULL OR node.disabled = false
             RETURN 
                 node.name AS tool_name,
                 node.description AS tool_description,
