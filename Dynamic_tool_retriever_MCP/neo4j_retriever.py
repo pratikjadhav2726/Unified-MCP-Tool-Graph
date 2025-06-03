@@ -33,8 +33,8 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: 
     Args:
         embedding: A list of floats representing the query embedding.
         top_k: The number of top similar tools to retrieve. Defaults to 3.
-        official_only: If set to True, restricts the results to only official tools/servers.
-        official_boost: A boost factor for the similarity score of official tools/servers. Defaults to 1.2.
+        official_only: If set to True, restricts the results to only official servers.
+        official_boost: A boost factor for the similarity score of official servers. Defaults to 1.2.
 
     Returns:
         A list of dictionaries, where each dictionary represents a tool
