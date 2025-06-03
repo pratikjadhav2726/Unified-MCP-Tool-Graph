@@ -13,7 +13,6 @@ tools_data = []
 
 # Loop over each server in the list
 for server in mcp_servers['data']:
-        # server = server_entry.get('server', {})
         vendor_id = server.get('id')
         vendor_name = server.get('name')
         vendor_description = server.get('description', '')
@@ -25,6 +24,8 @@ for server in mcp_servers['data']:
         if not tools:
             continue
         
+        is_official = 'author:official' in server.get('attributes', [])
+
         for tool in tools:
             tool_name = tool.get('name')
             tool_description = tool.get('description', '')
@@ -48,7 +49,8 @@ for server in mcp_servers['data']:
                 'tool_description': tool_description,
                 'tool_embedding': embedding.tolist(),  # Convert numpy array to list
                 'tool_parameters': properties,
-                'tool_required_parameters': required_fields
+                'tool_required_parameters': required_fields,
+                'is_official': is_official
             }
             
             tools_data.append(tool_record)

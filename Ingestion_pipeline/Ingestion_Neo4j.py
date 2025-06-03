@@ -21,7 +21,8 @@ CREATE_VENDOR_QUERY = """
 MERGE (v:Vendor {id: $vendor_id})
 SET v.name = $vendor_name,
     v.description = $vendor_description,
-    v.repository_url = $vendor_repo
+    v.repository_url = $vendor_repo,
+    v.is_official = $is_official
 """
 
 CREATE_TOOL_QUERY = """
@@ -30,7 +31,8 @@ SET t.description = $tool_description,
     t.input_parameters = $tool_parameters,
     t.required_parameters = $tool_required_parameters,
     t.embedding = $tool_embedding,
-    t.disabled = false
+    t.disabled = false,
+    t.is_official = $is_official
 """
 
 CREATE_RELATIONSHIP_QUERY = """
@@ -46,7 +48,8 @@ def insert_data(tx, record):
            vendor_id=record['vendor_id'],
            vendor_name=record['vendor_name'],
            vendor_description=record['vendor_description'],
-           vendor_repo=record['vendor_repo'])
+           vendor_repo=record['vendor_repo'],
+           is_official=record.get('is_official', False))
     
     # Insert Tool
     tx.run(CREATE_TOOL_QUERY,
@@ -55,7 +58,8 @@ def insert_data(tx, record):
            tool_parameters=record['tool_parameters'],
            tool_required_parameters=record['tool_required_parameters'],
            tool_embedding=record['tool_embedding'],
-           vendor_id=record['vendor_id'])
+           vendor_id=record['vendor_id'],
+           is_official=record.get('is_official', False))
     
     # Create Relationship
     tx.run(CREATE_RELATIONSHIP_QUERY,
