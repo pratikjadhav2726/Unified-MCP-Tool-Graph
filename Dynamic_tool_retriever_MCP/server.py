@@ -33,6 +33,8 @@ class DynamicRetrieverInput(BaseModel):
     """The user's task description for which relevant tools need to be found."""
     top_k: int
     """The maximum number of relevant tools to retrieve. Defaults to 3 in the retriever if not specified otherwise by a similar parameter in the retriever function."""
+    official_only: bool = False
+    """Flag to restrict retrieval to official tools only. Defaults to False."""
 
 @mcp.tool()
 async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
@@ -65,8 +67,8 @@ async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
     print(f"[INFO] Received task description: {input.task_description}")
     # Step 1: Embed the task description
     query_embedding = embed_text(input.task_description)
-    # Step 2: Query Neo4j to retrieve top-k similar tools
-    retrieved_tools = retrieve_top_k_tools(query_embedding, input.top_k)
+    # Step 2: Query Neo4j to retrieve top-k similar tools, optionally only official
+    retrieved_tools = retrieve_top_k_tools(query_embedding, input.top_k, official_only=input.official_only)
     print("Retrieved tools:", retrieved_tools)
 
     async def get_tool_with_config(tool):

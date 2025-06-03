@@ -23,7 +23,7 @@ driver = GraphDatabase.driver(
 )
 
 # Retrieval function
-def retrieve_top_k_tools(embedding: list[float], top_k: int = 3) -> list[dict]:
+def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: bool = False) -> list[dict]:
     """
     Retrieves the top K tools from the Neo4j database based on the similarity
     of their embeddings to the provided query embedding.
@@ -33,6 +33,7 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3) -> list[dict]:
     Args:
         embedding: A list of floats representing the query embedding.
         top_k: The number of top similar tools to retrieve. Defaults to 3.
+        official_only: If set to True, restricts the results to only official tools/servers.
 
     Returns:
         A list of dictionaries, where each dictionary represents a tool
@@ -48,23 +49,28 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3) -> list[dict]:
         The list is ordered by score in descending order.
     """
     with driver.session() as session:
+        cypher = """
+        WITH $embedding AS queryEmbedding
+        CALL db.index.vector.queryNodes('tool_vector_index', $topK, queryEmbedding)
+        YIELD node, score
+        MATCH (node)-[:BELONGS_TO_VENDOR]->(vendor:Vendor)
+        WHERE (node.disabled IS NULL OR node.disabled = false)
+        """
+        if official_only:
+            cypher += " AND (vendor.is_official = true OR node.is_official = true)"
+        cypher += """
+        RETURN 
+            node.name AS tool_name,
+            node.description AS tool_description,
+            node.input_parameters AS input_parameters,
+            node.required_parameters AS required_parameters,
+            vendor.name AS vendor_name,
+            vendor.repository_url AS vendor_repository_url,
+            score
+        ORDER BY score DESC
+        """
         result = session.run(
-            """
-            WITH $embedding AS queryEmbedding
-            CALL db.index.vector.queryNodes('tool_vector_index', $topK, queryEmbedding)
-            YIELD node, score
-            MATCH (node)-[:BELONGS_TO_VENDOR]->(vendor:Vendor)
-            WHERE node.disabled IS NULL OR node.disabled = false
-            RETURN 
-                node.name AS tool_name,
-                node.description AS tool_description,
-                node.input_parameters AS input_parameters,
-                node.required_parameters AS required_parameters,
-                vendor.name AS vendor_name,
-                vendor.repository_url AS vendor_repository_url,
-                score
-            ORDER BY score DESC
-            """,
+            cypher,
             embedding=embedding,
             topK=top_k
         )
