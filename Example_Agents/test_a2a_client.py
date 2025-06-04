@@ -1,160 +1,139 @@
-from a2a.client import A2AClient
+import logging
+
 from typing import Any
 from uuid import uuid4
+
+import httpx
+
+from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import (
-    SendMessageResponse,
-    GetTaskResponse,
-    SendMessageSuccessResponse,
-    Task,
-    TaskState,
-    SendMessageRequest,
+    AgentCard,
     MessageSendParams,
-    GetTaskRequest,
-    TaskQueryParams,
+    SendMessageRequest,
     SendStreamingMessageRequest,
 )
-import httpx
-import traceback
-
-AGENT_URL = 'http://localhost:10000'
-
-
-def create_send_message_payload(
-    text: str, task_id: str | None = None, context_id: str | None = None
-) -> dict[str, Any]:
-    """Helper function to create the payload for sending a task."""
-    payload: dict[str, Any] = {
-        'message': {
-            'role': 'user',
-            'parts': [{'kind': 'text', 'text': text}],
-            'messageId': uuid4().hex,
-        },
-    }
-
-    if task_id:
-        payload['message']['taskId'] = task_id
-
-    if context_id:
-        payload['message']['contextId'] = context_id
-    return payload
-
-
-def print_json_response(response: Any, description: str) -> None:
-    """Helper function to print the JSON representation of a response."""
-    print(f'--- {description} ---')
-    if hasattr(response, 'root'):
-        print(f'{response.root.model_dump_json(exclude_none=True)}\n')
-    else:
-        print(f'{response.model_dump(mode="json", exclude_none=True)}\n')
-
-
-async def run_single_turn_test(client: A2AClient) -> None:
-    """Runs a single-turn non-streaming test."""
-
-    send_payload = create_send_message_payload(
-        text='how much is 100 USD in CAD?'
-    )
-    request = SendMessageRequest(params=MessageSendParams(**send_payload))
-
-    print('--- Single Turn Request ---')
-    # Send Message
-    send_response: SendMessageResponse = await client.send_message(request)
-    print_json_response(send_response, 'Single Turn Request Response')
-    if not isinstance(send_response.root, SendMessageSuccessResponse):
-        print('received non-success response. Aborting get task ')
-        return
-
-    if not isinstance(send_response.root.result, Task):
-        print('received non-task response. Aborting get task ')
-        return
-
-    task_id: str = send_response.root.result.id
-    print('---Query Task---')
-    # query the task
-    get_request = GetTaskRequest(params=TaskQueryParams(id=task_id))
-    get_response: GetTaskResponse = await client.get_task(get_request)
-    print_json_response(get_response, 'Query Task Response')
-
-
-async def run_streaming_test(client: A2AClient) -> None:
-    """Runs a single-turn streaming test."""
-
-    send_payload = create_send_message_payload(
-        text='how much is 50 EUR in JPY?'
-    )
-
-    request = SendStreamingMessageRequest(
-        params=MessageSendParams(**send_payload)
-    )
-
-    print('--- Single Turn Streaming Request ---')
-    stream_response = client.send_message_streaming(request)
-    async for chunk in stream_response:
-        print_json_response(chunk, 'Streaming Chunk')
-
-
-async def run_multi_turn_test(client: A2AClient) -> None:
-    """Runs a multi-turn non-streaming test."""
-    print('--- Multi-Turn Request ---')
-    # --- First Turn ---
-
-    first_turn_payload = create_send_message_payload(
-        text='how much is 100 USD?'
-    )
-    request1 = SendMessageRequest(
-        params=MessageSendParams(**first_turn_payload)
-    )
-    first_turn_response: SendMessageResponse = await client.send_message(
-        request1
-    )
-    print_json_response(first_turn_response, 'Multi-Turn: First Turn Response')
-
-    context_id: str | None = None
-    if isinstance(
-        first_turn_response.root, SendMessageSuccessResponse
-    ) and isinstance(first_turn_response.root.result, Task):
-        task: Task = first_turn_response.root.result
-        context_id = task.contextId  # Capture context ID
-
-        # --- Second Turn (if input required) ---
-        if task.status.state == TaskState.input_required and context_id:
-            print('--- Multi-Turn: Second Turn (Input Required) ---')
-            second_turn_payload = create_send_message_payload(
-                'in GBP', task.id, context_id
-            )
-            request2 = SendMessageRequest(
-                params=MessageSendParams(**second_turn_payload)
-            )
-            second_turn_response = await client.send_message(request2)
-            print_json_response(
-                second_turn_response, 'Multi-Turn: Second Turn Response'
-            )
-        elif not context_id:
-            print('Warning: Could not get context ID from first turn response.')
-        else:
-            print(
-                'First turn completed, no further input required for this test case.'
-            )
 
 
 async def main() -> None:
-    """Main function to run the tests."""
-    print(f'Connecting to agent at {AGENT_URL}...')
-    try:
-        async with httpx.AsyncClient() as httpx_client:
-            client = await A2AClient.get_client_from_agent_card_url(
-                httpx_client, AGENT_URL
+    PUBLIC_AGENT_CARD_PATH = '/.well-known/agent.json'
+    EXTENDED_AGENT_CARD_PATH = '/agent/authenticatedExtendedCard'
+
+    # Configure logging to show INFO level messages
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)  # Get a logger instance
+
+    # --8<-- [start:A2ACardResolver]
+
+    base_url = 'http://localhost:10000'
+
+    async with httpx.AsyncClient() as httpx_client:
+        # Initialize A2ACardResolver
+        resolver = A2ACardResolver(
+            httpx_client=httpx_client,
+            base_url=base_url,
+            # agent_card_path uses default, extended_agent_card_path also uses default
+        )
+        # --8<-- [end:A2ACardResolver]
+
+        # Fetch Public Agent Card and Initialize Client
+        final_agent_card_to_use: AgentCard | None = None
+
+        try:
+            logger.info(
+                f'Attempting to fetch public agent card from: {base_url}{PUBLIC_AGENT_CARD_PATH}'
             )
-            print('Connection successful.')
+            _public_card = (
+                await resolver.get_agent_card()
+            )  # Fetches from default public path
+            logger.info('Successfully fetched public agent card:')
+            logger.info(
+                _public_card.model_dump_json(indent=2, exclude_none=True)
+            )
+            final_agent_card_to_use = _public_card
+            logger.info(
+                '\nUsing PUBLIC agent card for client initialization (default).'
+            )
 
-            await run_single_turn_test(client)
-            await run_streaming_test(client)
-            await run_multi_turn_test(client)
+            if _public_card.supportsAuthenticatedExtendedCard:
+                try:
+                    logger.info(
+                        f'\nPublic card supports authenticated extended card. Attempting to fetch from: {base_url}{EXTENDED_AGENT_CARD_PATH}'
+                    )
+                    auth_headers_dict = {
+                        'Authorization': 'Bearer dummy-token-for-extended-card'
+                    }
+                    _extended_card = await resolver.get_agent_card(
+                        relative_card_path=EXTENDED_AGENT_CARD_PATH,
+                        http_kwargs={'headers': auth_headers_dict},
+                    )
+                    logger.info(
+                        'Successfully fetched authenticated extended agent card:'
+                    )
+                    logger.info(
+                        _extended_card.model_dump_json(
+                            indent=2, exclude_none=True
+                        )
+                    )
+                    final_agent_card_to_use = (
+                        _extended_card  # Update to use the extended card
+                    )
+                    logger.info(
+                        '\nUsing AUTHENTICATED EXTENDED agent card for client initialization.'
+                    )
+                except Exception as e_extended:
+                    logger.warning(
+                        f'Failed to fetch extended agent card: {e_extended}. Will proceed with public card.',
+                        exc_info=True,
+                    )
+            elif (
+                _public_card
+            ):  # supportsAuthenticatedExtendedCard is False or None
+                logger.info(
+                    '\nPublic card does not indicate support for an extended card. Using public card.'
+                )
 
-    except Exception as e:
-        traceback.print_exc()
-        print(f'An error occurred: {e}')
-        print('Ensure the agent server is running.')
+        except Exception as e:
+            logger.error(
+                f'Critical error fetching public agent card: {e}', exc_info=True
+            )
+            raise RuntimeError(
+                'Failed to fetch the public agent card. Cannot continue.'
+            ) from e
+
+        # --8<-- [start:send_message]
+        client = A2AClient(
+            httpx_client=httpx_client, agent_card=final_agent_card_to_use
+        )
+        logger.info('A2AClient initialized.')
+
+        send_message_payload: dict[str, Any] = {
+            'message': {
+                'role': 'user',
+                'parts': [
+                    {'kind': 'text', 'text': 'how much is 10 USD in INR?'}
+                ],
+                'messageId': uuid4().hex,
+            },
+        }
+        request = SendMessageRequest(
+            id=str(uuid4()), params=MessageSendParams(**send_message_payload)
+        )
+
+        response = await client.send_message(request)
+        print(response.model_dump(mode='json', exclude_none=True))
+        # --8<-- [end:send_message]
+
+        # --8<-- [start:send_message_streaming]
+
+        streaming_request = SendStreamingMessageRequest(
+            id=str(uuid4()), params=MessageSendParams(**send_message_payload)
+        )
+
+        stream_response = client.send_message_streaming(streaming_request)
+
+        async for chunk in stream_response:
+            print(chunk.model_dump(mode='json', exclude_none=True))
+        # --8<-- [end:send_message_streaming]
 
 
 if __name__ == '__main__':
