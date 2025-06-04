@@ -5,7 +5,7 @@ neo4j
 sentence_transformers
 langchain_mcp_adapters
 pydantic
-python-a2a
+a2a-sdk
 langchain_groq
 langgraph
 langchain
