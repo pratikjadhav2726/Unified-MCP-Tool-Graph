@@ -3,6 +3,12 @@ import subprocess
 import time
 import os
 from typing import Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+# Optional: Add basicConfig for testing the script directly,
+# but usually the application using this manager should configure logging.
+# logging.basicConfig(level=logging.INFO)
 
 class MCPServerProcess:
     def __init__(self, name, command, args, endpoint=None, env=None):
@@ -17,11 +23,17 @@ class MCPServerProcess:
 
     def start(self):
         if self.process is None or self.process.poll() is not None:
-            # Merge provided env with current environment
-            env = dict(os.environ)
-            env.update(self.env)
-            self.process = subprocess.Popen([self.command] + self.args, env=env)
-            print(f"[MCP] Started {self.name} MCP server.")
+            logger.info(f"[MCP] Attempting to start {self.name} MCP server with command: {' '.join([self.command] + self.args)}")
+            try:
+                env = dict(os.environ)
+                env.update(self.env)
+                self.process = subprocess.Popen([self.command] + self.args, env=env)
+                logger.info(f"[MCP] Successfully started {self.name} MCP server (PID: {self.process.pid}).")
+            except Exception as e:
+                logger.error(f"[MCP] Failed to start {self.name} MCP server. Error: {e}")
+                self.process = None # Ensure process is None if start failed
+        else:
+            logger.info(f"[MCP] Server {self.name} is already running (PID: {self.process.pid}). Touching last_used time.")
         self.last_used = time.time()
 
     def touch(self):
@@ -29,8 +41,15 @@ class MCPServerProcess:
 
     def stop(self):
         if self.process and self.process.poll() is None:
-            self.process.terminate()
-            print(f"[MCP] Stopped {self.name} MCP server.")
+            logger.info(f"[MCP] Attempting to stop {self.name} MCP server (PID: {self.process.pid}).")
+            try:
+                self.process.terminate()
+                # Optionally, add wait and kill logic if terminate is not enough
+                logger.info(f"[MCP] Successfully sent terminate signal to {self.name} MCP server.")
+            except Exception as e:
+                logger.error(f"[MCP] Error stopping {self.name} MCP server (PID: {self.process.pid}). Error: {e}")
+        else:
+            logger.info(f"[MCP] Server {self.name} not running or already stopped.")
 
     def is_alive(self):
         return self.process and self.process.poll() is None
@@ -60,9 +79,15 @@ class MCPServerManager:
             self.add_and_start_server(name, cfg)
 
     def add_and_start_server(self, name, cfg):
-        # Support env keys in cfg
         env = cfg.get("env", {})
-        endpoint = self._assign_endpoint(name, cfg)
+        endpoint = self._assign_endpoint(name, cfg) # Endpoint assignment should be robust
+
+        # Basic check for command and args in cfg
+        if "command" not in cfg or "args" not in cfg:
+            logger.error(f"[MCP] Cannot start server {name} due to missing 'command' or 'args' in configuration: {cfg}")
+            return
+
+        logger.info(f"[MCP] Adding and starting server: {name}. Endpoint: {endpoint}. Config: {cfg}")
         if name not in self.servers:
             proc = MCPServerProcess(
                 name=name,
@@ -71,11 +96,16 @@ class MCPServerManager:
                 endpoint=endpoint,
                 env=env
             )
-            proc.start()
-            print(f"[MCP] {name} endpoint: {endpoint}")
             self.servers[name] = proc
-        else:
-            self.servers[name].start()
+            # Start is called on the next line by self.servers[name].start()
+
+        self.servers[name].start() # This will call MCPServerProcess.start() which now has logging
+        # Redundant log after start if MCPServerProcess.start logs success.
+        # if self.servers[name].is_alive():
+        #     logger.info(f"[MCP] {name} server is now active. Endpoint: {endpoint}")
+        # else:
+        #     logger.warning(f"[MCP] {name} server failed to start or is not alive after start attempt.")
+
 
     def ensure_server(self, name, cfg):
         if name not in self.servers or not self.servers[name].is_alive():
@@ -89,14 +119,16 @@ class MCPServerManager:
     async def cleanup_loop(self):
         while True:
             now = time.time()
-            for name, proc in list(self.servers.items()):
+            for name, proc in list(self.servers.items()): # Use list() for safe iteration if modifying dict
                 if proc.is_alive() and now - proc.last_used > proc.keep_alive_secs:
+                    logger.info(f"[MCP] Server {name} exceeded keep_alive_secs. Attempting to stop due to inactivity.")
                     proc.stop()
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
     import time
-    print("[TEST] Starting MCPServerManager test...")
+    logging.basicConfig(level=logging.INFO) # Add basicConfig for testing the script directly
+    logger.info("[TEST] Starting MCPServerManager test...")
     # Example config for Tavily MCP
     test_config = {
         "command": "npx",
@@ -107,11 +139,12 @@ if __name__ == "__main__":
         }
     }
     manager = MCPServerManager({})
-    print("[TEST] Ensuring server 'tavily-mcp' is started...")
+    logger.info("[TEST] Ensuring server 'tavily-mcp' is started...")
     manager.ensure_server("tavily-mcp", test_config)
-    print("[TEST] Active endpoints:", manager.get_active_endpoints())
-    print("[TEST] Sleeping for 5 seconds to keep server alive...")
+    logger.info(f"[TEST] Active endpoints: {manager.get_active_endpoints()}")
+    logger.info("[TEST] Sleeping for 5 seconds to keep server alive...")
     time.sleep(5)
-    print("[TEST] Stopping server...")
-    manager.servers["tavily-mcp"].stop()
-    print("[TEST] Done.")
+    logger.info("[TEST] Stopping server...")
+    if "tavily-mcp" in manager.servers:
+        manager.servers["tavily-mcp"].stop()
+    logger.info("[TEST] Done.")
