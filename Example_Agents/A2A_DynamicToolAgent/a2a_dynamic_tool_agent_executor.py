@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import logging
 from mcp_server_manager import MCPServerManager
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
@@ -9,6 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 
+logger = logging.getLogger(__name__)
 # --- CONFIGURE YOUR POPULAR MCP SERVERS HERE ---
 POPULAR_MCP_SERVERS = {
     "dynamic_tool_retriever": {
@@ -91,7 +93,7 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
         tool_infos = await call_dynamic_tool_retriever_via_mcpclient(
                 user_query=user_query, top_k=3, retriever_server_config=retriever_mcp_config
             )
-
+        print(f"[Debug] Retrieved tool infos: {tool_infos}")
         # 2. Ensure all required MCP servers are running
         for tool in tool_infos:
             mcp_cfg = tool.get('mcp_server_config')
