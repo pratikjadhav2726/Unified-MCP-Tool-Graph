@@ -20,22 +20,68 @@ POPULAR_MCP_SERVERS = {
     "dynamic_tool_retriever": {
         "command": "python",
         "args": ["Dynamic_tool_retriever_MCP/server.py"],
-        "endpoint": "http://localhost:8001"
+        "url": "http://localhost:8001/sse",  # Explicit MCP endpoint URL
+        "transport": "sse"                   # Explicit transport type
     },
-    # Add more if you want them always running
+    # Add more if you want them always running, following the same structure
 }
 
-def call_dynamic_tool_retriever_mcp(task_description, top_k=3):
-    url = POPULAR_MCP_SERVERS['dynamic_tool_retriever']['endpoint'] + "/dynamic_tool_retriever"
-    payload = {"task_description": task_description, "top_k": top_k}
+async def call_dynamic_tool_retriever_via_mcpclient(
+    user_query: str,
+    top_k: int,
+    retriever_server_config: dict,
+    retriever_tool_name: str = "dynamic_tool_retriever" # Allow overriding tool name if needed
+) -> list:
+    """
+    Calls the specified dynamic_tool_retriever tool via MCP client.
+
+    Args:
+        user_query: The user's task description.
+        top_k: The maximum number of relevant tools to retrieve.
+        retriever_server_config: MCP client configuration for the retriever server.
+                                 Example: {"dynamic_tool_retriever_server_key": {"url": "...", "transport": "..."}}
+        retriever_tool_name: The name of the retriever tool on its MCP server.
+
+    Returns:
+        A list of tool information dictionaries, or an empty list if an error occurs.
+    """
+    tool_infos = []
+    if not retriever_server_config:
+        logger.error("Retriever server configuration is empty. Cannot call retriever tool.")
+        return tool_infos
+
+    logger.info(f"Attempting to call tool '{retriever_tool_name}' via MCP using config: {retriever_server_config}")
+
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        async with MultiServerMCPClient(retriever_server_config) as client:
+            tools = client.get_tools()
+            dtr_tool = next((t for t in tools if getattr(t, 'name', None) == retriever_tool_name), None)
+
+            if not dtr_tool:
+                logger.error(f"Tool '{retriever_tool_name}' not found in MCP client with config {retriever_server_config}.")
+                return tool_infos
+
+            logger.info(f"Found '{retriever_tool_name}' tool via MCP. Invoking with query: '{user_query[:100]}...'")
+            tool_input = {
+                'task_description': user_query,
+                'top_k': top_k,
+                'official_only': False # Or make this a parameter if needed
+            }
+            # Assuming dtr_tool is a LangChain BaseTool or compatible
+            response = await dtr_tool.ainvoke(tool_input)
+
+            if isinstance(response, list):
+                tool_infos = response
+                logger.info(f"Successfully retrieved {len(tool_infos)} tool(s) using '{retriever_tool_name}' via MCP.")
+            else:
+                logger.error(f"'{retriever_tool_name}' tool via MCP returned an unexpected response type: {type(response)}. Expected list. Response: {response}")
+                # tool_infos remains empty
+
     except Exception as e:
-        # Using logger instead of print for consistency
-        logger.error(f"[ERROR] Failed to call dynamic tool retriever MCP: {e}", exc_info=True)
-        return []
+        logger.error(f"Failed to call '{retriever_tool_name}' via MCP. Error: {e}", exc_info=True)
+        # tool_infos remains empty
+
+    return tool_infos
 
 class A2ADynamicToolAgentExecutor(AgentExecutor):
     def __init__(self):
@@ -44,137 +90,149 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
         # Optionally: asyncio.create_task(self.mcp_manager.cleanup_loop())
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
-        task = context.current_task
-        if not task:
-            task = new_task(context.message)
-        updater = TaskUpdater(event_queue, task.id, task.contextId)
-
         user_query = context.get_user_input()
         if user_query is None:
-            user_query = "" # Ensure user_query is a string
+            user_query = ""
             logger.warning("User query from context.get_user_input() was None. Defaulting to empty string.")
+
         session_id = f"session-{int(time.time())}"
 
-        # 1. Get required tools from dynamic tool retriever
-        tool_infos = call_dynamic_tool_retriever_mcp(user_query, top_k=3)
+        task = context.current_task
+        if not task:
+            logger.error("No current_task in context. Cannot proceed.")
+            await event_queue.put({
+                'is_task_complete': True,
+                'require_user_input': False,
+                'content': "Error: Agent failed to initialize due to missing task context."
+            }) # Fallback direct event
+            return
 
-        # 2. Ensure all required MCP servers are running
-        valid_tool_infos = []
-        for tool_info in tool_infos:
-            mcp_cfg = tool_info.get('mcp_server_config')
-            tool_name = tool_info.get('tool_name')
+        updater = TaskUpdater(event_queue, task.id, task.contextId)
 
-            if not tool_name:
-                logger.warning(f"Tool information missing 'tool_name'. Skipping: {tool_info}")
-                continue
-
-            if mcp_cfg and isinstance(mcp_cfg, dict) and mcp_cfg.get("endpoint"):
-                self.mcp_manager.ensure_server(tool_name, mcp_cfg)
-                valid_tool_infos.append(tool_info)
+        # 1. Prepare retriever_mcp_config
+        retriever_server_key_in_popular = "dynamic_tool_retriever"
+        retriever_mcp_config = {}
+        if retriever_server_key_in_popular in POPULAR_MCP_SERVERS:
+            cfg = POPULAR_MCP_SERVERS[retriever_server_key_in_popular]
+            ret_url, ret_transport = cfg.get("url"), cfg.get("transport")
+            if ret_url and ret_transport:
+                retriever_mcp_config = { retriever_server_key_in_popular: { "url": ret_url, "transport": ret_transport } }
             else:
-                logger.warning(f"MCP server config missing or invalid for tool '{tool_name}'. Tool will not be available. Config: {mcp_cfg}")
+                logger.error(f"'{retriever_server_key_in_popular}' config in POPULAR_MCP_SERVERS missing 'url' or 'transport'.")
+        else:
+            logger.error(f"'{retriever_server_key_in_popular}' not found in POPULAR_MCP_SERVERS.")
 
-        # 3. Build MCP server config
-        mcp_servers_config = {}
-        for name, cfg in POPULAR_MCP_SERVERS.items():
-            mcp_servers_config[name] = {"url": cfg["endpoint"], "transport": "sse"}
+        # 2. Call retriever via helper
+        tool_infos = []
+        if retriever_mcp_config: # Proceed only if retriever config was successfully prepared
+            tool_infos = await call_dynamic_tool_retriever_via_mcpclient(
+                user_query=user_query, top_k=3, retriever_server_config=retriever_mcp_config
+            )
 
-        for tool_info in valid_tool_infos:
+        # 3. Filter tools and handle no tools case
+        tool_infos_with_config = [ti for ti in tool_infos if ti.get('mcp_server_config')]
+        if not tool_infos_with_config:
+            msg = "No tools with valid configurations found for your query." if tool_infos else "Failed to retrieve tools or no tools found for your query."
+            logger.warning(f"{msg} Query: '{user_query[:100]}...'")
+            updater.update_status(TaskState.completed, new_agent_text_message(msg, task.contextId, task.id), final=True)
+            return
+
+        # 4. Ensure servers for valid tools are running
+        valid_tool_infos_for_agent = []
+        for tool_info in tool_infos_with_config:
             mcp_cfg = tool_info['mcp_server_config']
             tool_name = tool_info['tool_name']
-            if tool_name not in mcp_servers_config:
-                if "url" in mcp_cfg and "transport" in mcp_cfg:
-                    mcp_servers_config[tool_name] = {
-                        "url": mcp_cfg["url"],
-                        "transport": mcp_cfg["transport"]
-                    }
-                elif "endpoint" in mcp_cfg:
-                     mcp_servers_config[tool_name] = {
-                        "url": mcp_cfg["endpoint"],
-                        "transport": mcp_cfg.get("transport", "sse")
-                    }
-                else:
-                    logger.warning(f"Cannot form client config for tool '{tool_name}' due to missing 'url' or 'endpoint' in mcp_cfg: {mcp_cfg}")
+            if mcp_cfg and isinstance(mcp_cfg, dict) and mcp_cfg.get("url"):
+                # Assuming mcp_manager.ensure_server can correctly identify/manage the server process
+                # based on tool_name and its specific mcp_cfg.
+                self.mcp_manager.ensure_server(tool_name, mcp_cfg)
+                valid_tool_infos_for_agent.append(tool_info)
+            else:
+                logger.warning(f"MCP server config invalid for tool '{tool_name}'. Skipping. Config: {mcp_cfg}")
 
-        # 4. Only load the exact tools retrieved and run agent
-        async with MultiServerMCPClient(mcp_servers_config) as client:
-            all_tools = client.get_tools()
-            required_tool_names = {ti['tool_name'] for ti in valid_tool_infos if ti.get('tool_name')}
+        if not valid_tool_infos_for_agent:
+             logger.warning("No tools remained after mcp_manager.ensure_server validation.")
+             updater.update_status(TaskState.completed, new_agent_text_message("Found tools, but none had server configurations that could be started by the manager.", task.contextId, task.id), final=True)
+             return
 
-            filtered_tools = [tool for tool in all_tools if getattr(tool, 'name', None) in required_tool_names]
-            if not filtered_tools and required_tool_names:
-                logger.warning(f"No tools were loaded for required tool names: {required_tool_names}. Check MCP server availability and configurations.")
+        # 5. Build main agent's MCP client config
+        mcp_servers_config_for_agent = {}
+        for name, cfg in POPULAR_MCP_SERVERS.items():
+            pop_url, pop_transport = cfg.get("url"), cfg.get("transport")
+            if pop_url and pop_transport: mcp_servers_config_for_agent[name] = {"url": pop_url, "transport": pop_transport}
+            else: logger.warning(f"Popular server '{name}' missing 'url'/'transport' in POPULAR_MCP_SERVERS. Skipping.")
 
-            # 5. Build the LangGraph agent
-            model = ChatGroq(
-                temperature=0,
-                groq_api_key=os.getenv("GROQ_API_KEY"),
-                model_name="qwen-qwq-32b"
-            )
-            memory = InMemorySaver()
-            SYSTEM_INSTRUCTION = (
-                "You are an agent that decomposes the user's task into sub-tasks and retrieves the best tools to solve it. "
-                "Give just the tools summary and workflow."
-            )
-            agent = create_react_agent(
-                model, tools=filtered_tools, prompt=SYSTEM_INSTRUCTION, checkpointer=memory
-            )
+        for tool_info in valid_tool_infos_for_agent:
+            server_cfg = tool_info['mcp_server_config']
+            server_key = server_cfg.get('url') or server_cfg.get('endpoint') # Use URL as unique key
+            if not server_key:
+                logger.warning(f"Tool '{tool_info['tool_name']}' mcp_server_config missing 'url'/'endpoint'. Skipping: {server_cfg}")
+                continue
+            if server_key not in mcp_servers_config_for_agent: # Add only if server not already listed
+                srv_url = server_cfg.get('url', server_cfg.get('endpoint')) # Prefer 'url'
+                srv_transport = server_cfg.get('transport', 'sse') # Default to 'sse' if not specified
+                mcp_servers_config_for_agent[server_key] = {"url": srv_url, "transport": srv_transport}
 
-            # 6. Run the agent and stream results to A2A
-            inputs = {'messages': [('user', user_query)]}
-            config = {'configurable': {'thread_id': session_id}}
+        logger.info(f"Final MCP client config for agent: {mcp_servers_config_for_agent}")
+
+        # 6. Agent Execution and Streaming with TaskUpdater
+        try:
+            async with MultiServerMCPClient(mcp_servers_config_for_agent) as client:
+                all_tools = client.get_tools()
+                required_tool_names = {ti['tool_name'] for ti in valid_tool_infos_for_agent}
+                filtered_tools = [t for t in all_tools if getattr(t, 'name', None) in required_tool_names]
+
+                if not filtered_tools and required_tool_names:
+                    logger.warning(f"No tools loaded for required names: {required_tool_names}. Check server statuses.")
+                    updater.update_status(TaskState.completed, new_agent_text_message(f"Could not load required tools: {', '.join(required_tool_names)}. Please check server status.", task.contextId, task.id), final=True)
+                    return
+
+                model = ChatGroq(temperature=0, groq_api_key=os.getenv("GROQ_API_KEY"), model_name="qwen-qwq-32b")
+                memory = InMemorySaver()
+                SYSTEM_INSTRUCTION = "You are an agent that decomposes the user's task into sub-tasks and retrieves the best tools to solve it. Give just the tools summary and workflow."
+                agent = create_react_agent(model, tools=filtered_tools, prompt=SYSTEM_INSTRUCTION, checkpointer=memory)
+
+                inputs = {'messages': [('user', user_query)]}
+                config = {'configurable': {'thread_id': session_id}}
+
+                last_streamed_content = ""
+                stream_had_content = False
+                final_message_content = "Agent processing complete." # Default final message
+
+                async for chunk in agent.astream(inputs, config=config):
+                    current_chunk_content = None
+                    # Simplified parsing: look for content in messages list from the chunk
+                    if "messages" in chunk and isinstance(chunk["messages"], list) and chunk["messages"]:
+                        last_msg_in_chunk = chunk["messages"][-1]
+                        if hasattr(last_msg_in_chunk, 'content'):
+                            current_chunk_content = last_msg_in_chunk.content
+
+                    # Fallback for other structures if necessary (more complex parsing can be added here)
+                    # For now, we primarily rely on the 'messages' structure from create_react_agent stream.
+
+                    if current_chunk_content and current_chunk_content != last_streamed_content:
+                        updater.update_status(TaskState.working, new_agent_text_message(current_chunk_content, task.contextId, task.id))
+                        last_streamed_content = current_chunk_content
+                        stream_had_content = True
+
+                # After the loop, complete the task
+                # The `last_streamed_content` is considered the final result if any content was generated and streamed.
+                if hasattr(updater, 'is_done') and updater.is_done(): # Hypothetical check, adapt if TaskUpdater has such a method
+                    pass # Already in a final state
+                elif stream_had_content:
+                    updater.add_artifact([Part(root=TextPart(text=last_streamed_content))], name='final_result')
+                    updater.complete()
+                else: # No content was streamed, or agent finished silently
+                    updater.update_status(TaskState.completed, new_agent_text_message(final_message_content, task.contextId, task.id), final=True)
+
+        except Exception as e:
+            logger.error(f"Exception during agent execution or streaming: {e}", exc_info=True)
             try:
-                async for item in agent.astream(inputs, config=config):
-                    is_task_complete = False
-                    require_user_input = False
-                    content = ""
-
-                    if isinstance(item, dict):
-                        is_task_complete = item.get('is_task_complete', False)
-                        require_user_input = item.get('require_user_input', False)
-                        content = item.get('content', '')
-                    else:
-                        agent_state = item.get('agent') if isinstance(item, dict) else None
-                        if agent_state and isinstance(agent_state, dict) and 'messages' in agent_state:
-                            messages = agent_state['messages']
-                            content = getattr(messages[-1], 'content', str(messages[-1])) if messages else ''
-                        elif 'messages' in item and item['messages']:
-                            messages = item['messages']
-                            content = getattr(messages[-1], 'content', str(messages[-1]))
-                        elif hasattr(item, 'content'):
-                             content = item.content
-                        else:
-                            content = str(item)
-
-                    if not is_task_complete and not require_user_input:
-                        updater.update_status(
-                            TaskState.working,
-                            new_agent_text_message(content, task.contextId, task.id),
-                        )
-                    elif require_user_input:
-                        updater.update_status(
-                            TaskState.input_required,
-                            new_agent_text_message(content, task.contextId, task.id),
-                            final=True,
-                        )
-                        break
-                    else: # Task is complete
-                        updater.add_artifact(
-                            [Part(root=TextPart(text=content if content else "Task completed successfully."))],
-                            name='tool_result',
-                        )
-                        updater.complete()
-                        break
-            except Exception as e:
-                error_message = f"Error during agent execution: {str(e)}"
-                logger.error(f"Agent execution failed: {error_message}", exc_info=True)
-                if 'updater' in locals():
-                    updater.update_status(
-                        TaskState.error,
-                        new_agent_text_message(error_message, task.contextId, task.id),
-                        final=True,
-                    )
-        # Note: The 'async def cancel' method is correctly outside the 'async with' block.
+                # Hypothetical check, adapt if TaskUpdater has such a method
+                # if not (hasattr(updater, 'is_done') and updater.is_done()):
+                updater.update_status(TaskState.error, new_agent_text_message(f"An error occurred: {str(e)}", task.contextId, task.id), final=True)
+            except Exception as ue: # If updater itself fails
+                 logger.error(f"Failed to update task status to error: {ue}", exc_info=True)
 
     async def cancel(self, request: RequestContext, event_queue: EventQueue) -> None:
         """Cancel a running task. (Not implemented)"""
