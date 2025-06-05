@@ -16,7 +16,8 @@ POPULAR_MCP_SERVERS = {
     "dynamic_tool_retriever": {
         "command": "python",
         "args": ["Dynamic_tool_retriever_MCP/server.py"],
-        "endpoint": "http://localhost:8000"
+        "url": "http://localhost:8000/sse",
+        "transport": "sse",
     },
     # Add more if you want them always running
 }
@@ -48,29 +49,30 @@ async def call_dynamic_tool_retriever_via_mcpclient(
     logger.info(f"Attempting to call tool '{retriever_tool_name}' via MCP using config: {retriever_server_config}")
 
     try:
-        async with MultiServerMCPClient(retriever_server_config) as client:
-            tools = client.get_tools()
-            dtr_tool = next((t for t in tools if getattr(t, 'name', None) == retriever_tool_name), None)
+        client = MultiServerMCPClient(retriever_server_config)
+        # async with MultiServerMCPClient(retriever_server_config) as client:
+        tools = await client.get_tools()
+        dtr_tool = next((t for t in tools if getattr(t, 'name', None) == retriever_tool_name), None)
 
-            if not dtr_tool:
-                logger.error(f"Tool '{retriever_tool_name}' not found in MCP client with config {retriever_server_config}.")
-                return tool_infos
+        if not dtr_tool:
+            logger.error(f"Tool '{retriever_tool_name}' not found in MCP client with config {retriever_server_config}.")
+            return tool_infos
 
-            logger.info(f"Found '{retriever_tool_name}' tool via MCP. Invoking with query: '{user_query[:100]}...'")
-            tool_input = {
-                'task_description': user_query,
-                'top_k': top_k,
-                'official_only': False # Or make this a parameter if needed
-            }
-            # Assuming dtr_tool is a LangChain BaseTool or compatible
-            response = await dtr_tool.ainvoke(tool_input)
+        logger.info(f"Found '{retriever_tool_name}' tool via MCP. Invoking with query: '{user_query[:100]}...'")
+        tool_input = {
+            'task_description': user_query,
+            'top_k': top_k,
+            'official_only': False # Or make this a parameter if needed
+        }
+        # Assuming dtr_tool is a LangChain BaseTool or compatible
+        response = await dtr_tool.arun(tool_input)
 
-            if isinstance(response, list):
-                tool_infos = response
-                logger.info(f"Successfully retrieved {len(tool_infos)} tool(s) using '{retriever_tool_name}' via MCP.")
-            else:
-                logger.error(f"'{retriever_tool_name}' tool via MCP returned an unexpected response type: {type(response)}. Expected list. Response: {response}")
-                # tool_infos remains empty
+        if isinstance(response, list):
+            tool_infos = response
+            logger.info(f"Successfully retrieved {len(tool_infos)} tool(s) using '{retriever_tool_name}' via MCP.")
+        else:
+            logger.error(f"'{retriever_tool_name}' tool via MCP returned an unexpected response type: {type(response)}. Expected list. Response: {response}")
+            # tool_infos remains empty
 
     except Exception as e:
         logger.error(f"Failed to call '{retriever_tool_name}' via MCP. Error: {e}", exc_info=True)
@@ -86,8 +88,14 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
         # Optionally: asyncio.create_task(self.mcp_manager.cleanup_loop())
 
     async def execute(self, context: RequestContext, event_queue: EventQueue):
-        user_query = context.task.input.text if context.task.input else ""
+        user_query = context.get_user_input()
         session_id = f"session-{int(time.time())}"
+
+
+        cfg = POPULAR_MCP_SERVERS["dynamic_tool_retriever"]
+        ret_url, ret_transport = cfg.get("url"), cfg.get("transport")
+        if ret_url and ret_transport:
+            retriever_mcp_config = { "dynamic_tool_retriever": { "url": ret_url, "transport": ret_transport } }
 
         # 1. Get required tools from dynamic tool retriever
         tool_infos = await call_dynamic_tool_retriever_via_mcpclient(
