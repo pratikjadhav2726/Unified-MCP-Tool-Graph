@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import json
 import logging
 from mcp_server_manager import MCPServerManager
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -59,20 +60,16 @@ async def call_dynamic_tool_retriever_via_mcpclient(
             return tool_infos
 
         logger.info(f"Found '{retriever_tool_name}' tool via MCP. Invoking with query: '{user_query[:100]}...'")
-        tool_input = {
-            'task_description': user_query,
-            'top_k': top_k,
-            'official_only': False # Or make this a parameter if needed
-        }
+        tool_input = {"input": {
+            "task_description": user_query,
+            "top_k": top_k,
+        }}
         # Assuming dtr_tool is a LangChain BaseTool or compatible
         response = await dtr_tool.arun(tool_input)
 
         if isinstance(response, list):
             tool_infos = response
             logger.info(f"Successfully retrieved {len(tool_infos)} tool(s) using '{retriever_tool_name}' via MCP.")
-        else:
-            logger.error(f"'{retriever_tool_name}' tool via MCP returned an unexpected response type: {type(response)}. Expected list. Response: {response}")
-            # tool_infos remains empty
 
     except Exception as e:
         logger.error(f"Failed to call '{retriever_tool_name}' via MCP. Error: {e}", exc_info=True)
@@ -102,12 +99,14 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
                 user_query=user_query, top_k=3, retriever_server_config=retriever_mcp_config
             )
         print(f"[Debug] Retrieved tool infos: {tool_infos}")
+        tool_infos=[json.loads(item) for item in tool_infos]
         # 2. Ensure all required MCP servers are running
         for tool in tool_infos:
             mcp_cfg = tool.get('mcp_server_config')
+            cfg = next(iter(mcp_cfg.values()))
             tool_name = tool.get('tool_name')
             if mcp_cfg and tool_name:
-                self.mcp_manager.ensure_server(tool_name, mcp_cfg)
+                self.mcp_manager.ensure_server(tool_name, cfg)
 
         # 3. Build MCP server config for only the 5 popular and new required
         mcp_servers_config = {}
