@@ -103,7 +103,7 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
         # 2. Ensure all required MCP servers are running
         for tool in tool_infos:
             mcp_cfg = tool.get('mcp_server_config')
-            cfg = next(iter(mcp_cfg.values()))
+            # cfg = next(iter(mcp_cfg.values()))
             tool_name = tool.get('tool_name')
             if mcp_cfg and tool_name:
                 self.mcp_manager.ensure_server(tool_name, cfg)
