@@ -70,7 +70,8 @@ async def call_dynamic_tool_retriever_via_mcpclient(
         if isinstance(response, list):
             tool_infos = response
             logger.info(f"Successfully retrieved {len(tool_infos)} tool(s) using '{retriever_tool_name}' via MCP.")
-
+        else: 
+            tool_infos = [response] if response else []
     except Exception as e:
         logger.error(f"Failed to call '{retriever_tool_name}' via MCP. Error: {e}", exc_info=True)
         # tool_infos remains empty
@@ -106,7 +107,9 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
             # cfg = next(iter(mcp_cfg.values()))
             tool_name = tool.get('tool_name')
             if mcp_cfg and tool_name:
-                self.mcp_manager.ensure_server(tool_name, cfg)
+                cfg = self.mcp_manager.ensure_server(tool_name, mcp_cfg)
+                tool['mcp_server_config'] = cfg  # Update tool info with ensured config
+
 
         # 3. Build MCP server config for only the 5 popular and new required
         mcp_servers_config = {}
@@ -120,8 +123,8 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
 
         # 4. Only load the exact tools retrieved
         client = MultiServerMCPClient(mcp_servers_config)
-        await client.__aenter__()
-        all_tools = client.get_tools()
+        # await client.__aenter__()
+        all_tools = await client.get_tools()
         required_tool_names = {tool['tool_name'] for tool in tool_infos}
         filtered_tools = [tool for tool in all_tools if getattr(tool, 'name', None) in required_tool_names]
 

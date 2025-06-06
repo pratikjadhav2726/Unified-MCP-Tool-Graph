@@ -51,7 +51,7 @@ class MCPServerManager:
                 self._name_to_port[name] = self._next_port
                 self._next_port += 1
             port = self._name_to_port[name]
-            endpoint = f"http://localhost:{port}"
+            endpoint = f"http://localhost:{port}/sse"
             cfg["endpoint"] = endpoint  # Mutate config so downstream code sees it
         return endpoint
 
@@ -76,12 +76,17 @@ class MCPServerManager:
             self.servers[name] = proc
         else:
             self.servers[name].start()
+        cfg["endpoint"] = endpoint  # Ensure cfg has the endpoint
+        cfg["transport"] = "sse"
+        return cfg
 
     def ensure_server(self, name, cfg):
         if name not in self.servers or not self.servers[name].is_alive():
-            self.add_and_start_server(name, cfg)
+            cfg = self.add_and_start_server(name, cfg)
+            return cfg
         else:
             self.servers[name].touch()
+            return {"endpoint":self.servers[name].endpoint, "transport": "sse"}
 
     def get_active_endpoints(self):
         return {name: proc.endpoint for name, proc in self.servers.items() if proc.is_alive()}
