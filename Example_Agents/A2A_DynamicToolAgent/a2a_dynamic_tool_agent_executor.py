@@ -107,6 +107,7 @@ class A2ADynamicToolAgentExecutor(AgentExecutor):
             # cfg = next(iter(mcp_cfg.values()))
             tool_name = tool.get('tool_name')
             if mcp_cfg and tool_name:
+                mcp_cfg = next(iter(tool['mcp_server_config']['mcpServers'].values()))
                 cfg = self.mcp_manager.ensure_server(tool_name, mcp_cfg)
                 tool['mcp_server_config'] = cfg  # Update tool info with ensured config
 

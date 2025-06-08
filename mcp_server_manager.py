@@ -3,6 +3,7 @@ import subprocess
 import time
 import os
 from typing import Dict, Optional
+from urllib.parse import urlparse  # new import
 
 class MCPServerProcess:
     def __init__(self, name, command, args, endpoint=None, env=None):
@@ -60,9 +61,31 @@ class MCPServerManager:
             self.add_and_start_server(name, cfg)
 
     def add_and_start_server(self, name, cfg):
-        # Support env keys in cfg
         env = cfg.get("env", {})
         endpoint = self._assign_endpoint(name, cfg)
+
+        # parse the assigned endpoint to get the port
+        parsed = urlparse(endpoint)
+        port = parsed.port
+
+        # docker: inject -p host:container mapping if missing
+        if cfg["command"] == "docker":
+            args = list(cfg["args"])
+            if "-p" not in args:
+                try:
+                    idx = args.index("run") + 1
+                except ValueError:
+                    idx = 0
+                args[idx:idx] = ["-p", f"{port}:{port}"]
+            cfg["args"] = args
+
+        # npx: inject --port <port> if missing
+        if cfg["command"] == "npx":
+            args = list(cfg["args"])
+            if "--port" not in args and "-p" not in args:
+                args += ["--port", str(port)]
+            cfg["args"] = args
+
         if name not in self.servers:
             proc = MCPServerProcess(
                 name=name,
