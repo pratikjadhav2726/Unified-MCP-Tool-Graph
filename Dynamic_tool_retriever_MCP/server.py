@@ -1,143 +1,236 @@
 """
-Implements an MCP server for dynamic tool retrieval.
+Dynamic Tool Retriever MCP Server
 
-The server exposes a tool that, given a task description, retrieves a list of
-relevant tools from a Neo4j database using semantic similarity.
-It utilizes text embeddings for the task description and pre-indexed tool descriptions
-in the database.
+Implements an MCP server for intelligent tool retrieval using semantic similarity
+and environment validation. The server dynamically filters tools based on:
+1. Semantic similarity to user queries using local Sentence Transformers
+2. Available environment configurations
+3. MCP server compatibility
+
+Key Features:
+- Semantic search using local text embeddings (no API keys required)
+- Environment key validation
+- MCP configuration extraction from GitHub
+- Intelligent tool ranking and filtering
 """
 
 import sys
 import os
+import asyncio
+import logging
+from typing import List, Dict, Optional, Tuple, Any
+
+# Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from embedder import embed_text
 from neo4j_retriever import retrieve_top_k_tools
-import asyncio
 from Utils.get_MCP_config import extract_config_from_github_async
-from Utils.get_available_env_keys import get_available_env_keys_from_dotenv  # new import
+from Utils.get_available_env_keys import get_available_env_keys_from_dotenv
 
-# Initialize MCP Server instance for the Dynamic Tool Retriever.
-# This server will host tools that can be called remotely via MCP.
-mcp = FastMCP("DynamicToolRetrieverMCP")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_TOP_K = 3
+CANDIDATE_MULTIPLIER = 10
+SERVER_NAME = "DynamicToolRetrieverMCP"
+
+# Initialize MCP Server
+mcp = FastMCP(SERVER_NAME)
 
 class DynamicRetrieverInput(BaseModel):
-    """
-    Input model for the dynamic_tool_retriever tool.
+    """Input schema for dynamic tool retrieval."""
     
-    Defines the expected structure and types for the input data.
+    task_description: str = Field(
+        ..., 
+        description="The user's task description for which relevant tools need to be found",
+        min_length=1
+    )
+    
+    top_k: int = Field(
+        default=DEFAULT_TOP_K,
+        description="Maximum number of relevant tools to retrieve",
+        ge=1,
+        le=50
+    )
+    
+    official_only: bool = Field(
+        default=False,
+        description="Flag to restrict retrieval to official tools only"
+    )
+
+class ToolResponse(BaseModel):
+    """Response schema for retrieved tools."""
+    
+    tool_name: str
+    tool_description: str
+    tool_parameters: Any
+    tool_required_parameters: Any
+    vendor_name: str
+    vendor_repo: Optional[str]
+    similarity_score: float
+    mcp_server_config: Optional[Dict[str, Any]]
+
+async def fetch_tool_config_pair(tool: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """
-    task_description: str
-    """The user's task description for which relevant tools need to be found."""
-    top_k: int
-    """The maximum number of relevant tools to retrieve. Defaults to 3 in the retriever if not specified otherwise by a similar parameter in the retriever function."""
-    official_only: bool = False
-    """Flag to restrict retrieval to official tools only. Defaults to False."""
+    Fetch MCP configuration for a tool from its repository.
+    
+    Args:
+        tool: Tool information dictionary
+        
+    Returns:
+        Tuple of (tool, config) where config may be None if extraction fails
+    """
+    repo_url = tool.get("vendor_repository_url")
+    if not repo_url:
+        logger.debug(f"No repository URL for tool: {tool.get('tool_name', 'Unknown')}")
+        return tool, None
+    
+    try:
+        config = await extract_config_from_github_async(repo_url)
+        logger.debug(f"Successfully extracted config for {tool.get('tool_name')}")
+        return tool, config
+    except Exception as e:
+        logger.warning(f"Failed to extract config from {repo_url}: {e}")
+        return tool, None
+
+def validate_environment_requirements(config: Dict[str, Any], available_keys: List[str]) -> bool:
+    """
+    Validate if required environment keys are available.
+    
+    Args:
+        config: MCP server configuration
+        available_keys: List of available environment variable keys
+        
+    Returns:
+        True if all required keys are available, False otherwise
+    """
+    if not config:
+        return False
+    
+    servers = config.get("mcpServers", {})
+    if not servers:
+        return False
+    
+    # Get the first server configuration (assuming single server per config)
+    server_config = next(iter(servers.values()), {})
+    required_keys = set(server_config.get("env", {}).keys())
+    
+    return required_keys <= set(available_keys)
+
+def build_tool_response(tool: Dict[str, Any], config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build standardized tool response with configuration.
+    
+    Args:
+        tool: Tool information
+        config: MCP server configuration (may be None)
+        
+    Returns:
+        Formatted tool response dictionary
+    """
+    return {
+        "tool_name": tool.get("tool_name", "Unknown"),
+        "tool_description": tool.get("tool_description", "No description available"),
+        "tool_parameters": tool.get("input_parameters"),
+        "tool_required_parameters": tool.get("required_parameters"),
+        "vendor_name": tool.get("vendor_name", "Unknown Vendor"),
+        "vendor_repo": tool.get("vendor_repository_url"),
+        "similarity_score": tool.get("score", 0.0),
+        "mcp_server_config": config
+    }
 
 @mcp.tool()
-async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
+async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> List[Dict[str, Any]]:
     """
-    Retrieves the top-k most relevant tools for a given user task description.
+    Retrieve the most relevant tools for a given task description.
 
-    The process involves:
-    1. Embedding the input task description into a vector.
-    2. Querying a Neo4j graph database (which contains pre-embedded tool descriptions)
-       to find tools with descriptions semantically similar to the task.
-    3. Formatting the retrieved tool information into a structured list.
+    This function performs intelligent tool retrieval through:
+    1. Semantic embedding of the task description using local Sentence Transformers
+    2. Vector similarity search in Neo4j graph database
+    3. MCP configuration extraction from vendor repositories
+    4. Environment validation and compatibility checking
+    5. Intelligent ranking and selection of top-k tools
 
     Args:
-        input: An instance of `DynamicRetrieverInput` containing:
-            - task_description (str): The description of the task.
-            - top_k (int): The number of top relevant tools to retrieve.
+        input: DynamicRetrieverInput containing task description, top_k, and filters
 
     Returns:
-        A list of dictionaries, where each dictionary represents a retrieved tool
-        and contains the following keys:
-        - "tool_name" (str): The name of the tool.
-        - "tool_description" (str): The description of the tool.
-        - "tool_parameters" (dict/str): Input parameters of the tool.
-        - "tool_required_parameters" (list/str): Required parameters for the tool.
-        - "vendor_name" (str): The name of the vendor providing the tool.
-        - "vendor_repo" (str): The repository URL of the vendor.
-        - "similarity_score" (float): The similarity score between the task
-                                      description and the tool description.
+        List of tool dictionaries with complete configuration information
+
+    Raises:
+        Exception: If critical errors occur during retrieval process
     """
-    print(f"[INFO] Received task description: {input.task_description}")
-    # Step 1: Embed the task description
-    query_embedding = embed_text(input.task_description)
-    # Step 2: Query Neo4j for extended candidate set then rerank by env requirements
-    initial_tools = retrieve_top_k_tools(query_embedding, input.top_k * 10, official_only=input.official_only)
-    # fetch local environment keys
-    available_keys = get_available_env_keys_from_dotenv()
-    # fetch MCP configs for initial candidates
-    async def _fetch_pair(tool):
-        repo = tool.get("vendor_repository_url")
-        if not repo:
-            return tool, None
-        try:
-            cfg = await extract_config_from_github_async(repo)
-            return tool, cfg
-        except Exception:
-            return tool, None
-    pairs = await asyncio.gather(*( _fetch_pair(t) for t in initial_tools ))
-    # filter to tools with config and available env keys in the MCP config
-    valid_pairs = []
-    for tool, cfg in pairs:
-        if not cfg:
-            continue
-        servers = cfg.get("mcpServers", {})
-        # assume single server entry
-        srv_cfg = next(iter(servers.values()), {})
-        required = srv_cfg.get("env", {}).keys()
-        if set(required) <= set(available_keys):
-            valid_pairs.append((tool, cfg))
-    # select top_k by similarity score
-    retrieved_tools = [tp[0] for tp in sorted(
-        valid_pairs,
-        key=lambda tp: -tp[0].get("score", 0)
-    )][: input.top_k]
-    print("Selected tools with MCP config and required env keys:", [t.get("tool_name") for t in retrieved_tools])
-    # build map of repo to config for lookup
-    config_map = {tool.get("vendor_repository_url"): cfg for tool, cfg in valid_pairs}
-
-    async def get_tool_with_config(tool):
-        vendor_repo = tool.get("vendor_repository_url")
-        mcp_server_config = config_map.get(vendor_repo)
-        return {
-             "tool_name": tool.get("tool_name"),
-             "tool_description": tool.get("tool_description"),
-             "tool_parameters": tool.get("input_parameters"),
-             "tool_required_parameters": tool.get("required_parameters"),
-             "vendor_name": tool.get("vendor_name"),
-             "vendor_repo": vendor_repo,
-             # "required_env_keys": tool.get("vendor_required_env_keys"),
-             "similarity_score": tool.get("score"),
-             "mcp_server_config": mcp_server_config
-         }
-
-    tasks = [get_tool_with_config(tool) for tool in retrieved_tools]
+    logger.info(f"Processing task: '{input.task_description}' (top_k={input.top_k}, official_only={input.official_only})")
+    
     try:
-        response = await asyncio.gather(*tasks)
+        # Step 1: Generate semantic embedding using local Sentence Transformers
+        query_embedding = embed_text(input.task_description)
+        logger.debug("Successfully generated task embedding using local model")
+        
+        # Step 2: Retrieve expanded candidate set from Neo4j
+        candidate_count = input.top_k * CANDIDATE_MULTIPLIER
+        initial_tools = retrieve_top_k_tools(
+            query_embedding, 
+            candidate_count, 
+            official_only=input.official_only
+        )
+        logger.info(f"Retrieved {len(initial_tools)} initial candidate tools")
+        
+        # Step 3: Get available environment keys
+        available_keys = get_available_env_keys_from_dotenv()
+        logger.debug(f"Found {len(available_keys)} available environment keys")
+        
+        # Step 4: Fetch MCP configurations asynchronously
+        tool_config_pairs = await asyncio.gather(
+            *[fetch_tool_config_pair(tool) for tool in initial_tools],
+            return_exceptions=True
+        )
+        
+        # Filter out exceptions and process results
+        valid_pairs = []
+        for result in tool_config_pairs:
+            if isinstance(result, Exception):
+                logger.warning(f"Config fetch failed: {result}")
+                continue
+            
+            tool, config = result
+            if validate_environment_requirements(config, available_keys):
+                valid_pairs.append((tool, config))
+        
+        logger.info(f"Found {len(valid_pairs)} tools with valid configurations")
+        
+        # Step 5: Rank by similarity and select top-k
+        ranked_pairs = sorted(
+            valid_pairs,
+            key=lambda pair: pair[0].get("score", 0.0),
+            reverse=True
+        )
+        
+        selected_pairs = ranked_pairs[:input.top_k]
+        selected_tool_names = [pair[0].get("tool_name", "Unknown") for pair in selected_pairs]
+        logger.info(f"Selected tools: {selected_tool_names}")
+        
+        # Step 6: Build final response
+        response = [
+            build_tool_response(tool, config) 
+            for tool, config in selected_pairs
+        ]
+        
+        logger.info(f"Successfully retrieved {len(response)} tools")
+        return response
+        
     except Exception as e:
-        print(f"[ERROR] Failed to build tool response with configs: {e}")
-        # fallback: return tools without configs
-        response = []
-        for tool in retrieved_tools:
-            response.append({
-                "tool_name": tool.get("tool_name"),
-                "tool_description": tool.get("tool_description"),
-                "tool_parameters": tool.get("input_parameters"),
-                "tool_required_parameters": tool.get("required_parameters"),
-                "vendor_name": tool.get("vendor_name"),
-                "vendor_repo": tool.get("vendor_repository_url"),
-                # "required_env_keys": tool.get("vendor_required_env_keys"),
-                "similarity_score": tool.get("score"),
-                "mcp_server_config": None
-            })
-    return response
+        logger.error(f"Critical error in tool retrieval: {e}")
+        # Return empty list rather than raising to maintain MCP compatibility
+        return []
+
 
 if __name__ == "__main__":
+    logger.info(f"Starting {SERVER_NAME} server...")
     mcp.run(transport="sse")
