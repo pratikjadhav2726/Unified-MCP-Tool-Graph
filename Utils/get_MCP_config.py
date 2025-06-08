@@ -71,6 +71,7 @@ async def extract_config_from_github_async(url):
             config_str = re.sub(r'\s+', ' ', raw_config).strip()
             cleaned_json_string = re.sub(r',\s*([}\]])', r'\1', config_str)
             config = json.loads(cleaned_json_string)
+            config = inject_env_keys(config)  # Inject environment variables
             return config
         except json.JSONDecodeError as e:
             print(f"[ERROR] Failed to decode JSON from GitHub content: {e}")
