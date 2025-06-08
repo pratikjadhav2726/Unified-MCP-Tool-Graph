@@ -18,6 +18,7 @@ from embedder import embed_text
 from neo4j_retriever import retrieve_top_k_tools
 import asyncio
 from Utils.get_MCP_config import extract_config_from_github_async
+from Utils.get_available_env_keys import get_available_env_keys_from_dotenv  # new import
 
 # Initialize MCP Server instance for the Dynamic Tool Retriever.
 # This server will host tools that can be called remotely via MCP.
@@ -67,30 +68,55 @@ async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> list:
     print(f"[INFO] Received task description: {input.task_description}")
     # Step 1: Embed the task description
     query_embedding = embed_text(input.task_description)
-    # Step 2: Query Neo4j to retrieve top-k similar tools, optionally only official
-    retrieved_tools = retrieve_top_k_tools(query_embedding, input.top_k, official_only=input.official_only)
-    print("Retrieved tools:", retrieved_tools)
+    # Step 2: Query Neo4j for extended candidate set then rerank by env requirements
+    initial_tools = retrieve_top_k_tools(query_embedding, input.top_k * 10, official_only=input.official_only)
+    # fetch local environment keys
+    available_keys = get_available_env_keys_from_dotenv()
+    # fetch MCP configs for initial candidates
+    async def _fetch_pair(tool):
+        repo = tool.get("vendor_repository_url")
+        if not repo:
+            return tool, None
+        try:
+            cfg = await extract_config_from_github_async(repo)
+            return tool, cfg
+        except Exception:
+            return tool, None
+    pairs = await asyncio.gather(*( _fetch_pair(t) for t in initial_tools ))
+    # filter to tools with config and available env keys in the MCP config
+    valid_pairs = []
+    for tool, cfg in pairs:
+        if not cfg:
+            continue
+        servers = cfg.get("mcpServers", {})
+        # assume single server entry
+        srv_cfg = next(iter(servers.values()), {})
+        required = srv_cfg.get("env", {}).keys()
+        if set(required) <= set(available_keys):
+            valid_pairs.append((tool, cfg))
+    # select top_k by similarity score
+    retrieved_tools = [tp[0] for tp in sorted(
+        valid_pairs,
+        key=lambda tp: -tp[0].get("score", 0)
+    )][: input.top_k]
+    print("Selected tools with MCP config and required env keys:", [t.get("tool_name") for t in retrieved_tools])
+    # build map of repo to config for lookup
+    config_map = {tool.get("vendor_repository_url"): cfg for tool, cfg in valid_pairs}
 
     async def get_tool_with_config(tool):
         vendor_repo = tool.get("vendor_repository_url")
-        mcp_server_config = None
-        if vendor_repo:
-            try:
-                mcp_server_config = await extract_config_from_github_async(vendor_repo)
-            except Exception as e:
-                mcp_server_config = None
-                print(f"[WARN] Could not fetch MCP config for {vendor_repo}: {e}")
+        mcp_server_config = config_map.get(vendor_repo)
         return {
-            "tool_name": tool.get("tool_name"),
-            "tool_description": tool.get("tool_description"),
-            "tool_parameters": tool.get("input_parameters"),
-            "tool_required_parameters": tool.get("required_parameters"),
-            "vendor_name": tool.get("vendor_name"),
-            "vendor_repo": vendor_repo,
-            # "required_env_keys": tool.get("vendor_required_env_keys"),
-            "similarity_score": tool.get("score"),
-            "mcp_server_config": mcp_server_config
-        }
+             "tool_name": tool.get("tool_name"),
+             "tool_description": tool.get("tool_description"),
+             "tool_parameters": tool.get("input_parameters"),
+             "tool_required_parameters": tool.get("required_parameters"),
+             "vendor_name": tool.get("vendor_name"),
+             "vendor_repo": vendor_repo,
+             # "required_env_keys": tool.get("vendor_required_env_keys"),
+             "similarity_score": tool.get("score"),
+             "mcp_server_config": mcp_server_config
+         }
 
     tasks = [get_tool_with_config(tool) for tool in retrieved_tools]
     try:
