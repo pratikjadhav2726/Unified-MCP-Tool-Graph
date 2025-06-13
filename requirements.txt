@@ -10,3 +10,7 @@ langchain_groq
 langgraph
 langchain
 langchain_community
+mcp
+fastapi
+uvicorn[standard]
+websockets
