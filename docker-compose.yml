@@ -1,0 +1,210 @@
+version: '3.8'
+
+# Unified MCP Tool Server Docker Compose Configuration
+# Includes MCP server, Neo4j database, and monitoring services
+
+services:
+  # =================================
+  # Neo4j Graph Database
+  # =================================
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: unified-mcp-neo4j
+    restart: unless-stopped
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"  # HTTP
+      - "${NEO4J_BOLT_PORT:-7687}:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password}
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=2G
+      - NEO4J_server_memory_pagecache_size=1G
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_PLUGINS=["apoc", "graph-data-science"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    networks:
+      - mcp_network
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1' | cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-password} || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # =================================
+  # Unified MCP Tool Server
+  # =================================
+  unified-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-2.0.0}
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+    container_name: unified-mcp-server
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+      - "${METRICS_PORT:-9090}:9090"
+    environment:
+      # Core Configuration
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-unified-tool-server}
+      - MCP_SERVER_VERSION=${BUILD_VERSION:-2.0.0}
+      - MCP_PROTOCOL_VERSION=${MCP_PROTOCOL_VERSION:-2025-06-18}
+      
+      # Transport Configuration
+      - TRANSPORT_TYPE=${TRANSPORT_TYPE:-streamable-http}
+      - HOST=0.0.0.0
+      - PORT=8000
+      
+      # Neo4j Configuration
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      
+      # Authentication (optional)
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - OAUTH_ISSUER_URL=${OAUTH_ISSUER_URL:-}
+      - REQUIRED_SCOPES=${REQUIRED_SCOPES:-mcp:read,mcp:write}
+      
+      # Monitoring
+      - HEALTH_CHECK_ENABLED=true
+      - METRICS_ENABLED=true
+      - METRICS_PORT=9090
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - mcp_logs:/app/logs
+      - mcp_data:/app/data
+    networks:
+      - mcp_network
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # =================================
+  # Prometheus Monitoring
+  # =================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: unified-mcp-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - mcp_network
+    depends_on:
+      - unified-mcp-server
+
+  # =================================
+  # Grafana Dashboard
+  # =================================
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: unified-mcp-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - mcp_network
+    depends_on:
+      - prometheus
+
+  # =================================
+  # Nginx Reverse Proxy (Production)
+  # =================================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: unified-mcp-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - mcp_network
+    depends_on:
+      - unified-mcp-server
+    profiles:
+      - production
+
+# =================================
+# Networks
+# =================================
+networks:
+  mcp_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# =================================
+# Volumes
+# =================================
+volumes:
+  # Neo4j volumes
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
+  neo4j_plugins:
+    driver: local
+  
+  # MCP server volumes
+  mcp_logs:
+    driver: local
+  mcp_data:
+    driver: local
+  
+  # Monitoring volumes
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  
+  # Nginx volumes
+  nginx_logs:
+    driver: local
