@@ -10,3 +10,9 @@ langchain_groq
 langgraph
 langchain
 langchain_community
+mcp
+fastapi
+uvicorn
+httpx
+pytest
+pytest-asyncio

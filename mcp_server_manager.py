@@ -243,6 +243,20 @@ class MCPServerManager:
         self.session_managers = {}
         self.routes_added = set()
 
+    async def check_server_health(self, server_name: str) -> bool:
+        """Check if a server is healthy and responsive"""
+        if server_name not in self.sessions:
+            return False
+        
+        session, _ = self.sessions[server_name]
+        try:
+            # Try to list tools as a health check (this is a reliable method)
+            await asyncio.wait_for(session.list_tools(), timeout=5.0)
+            return True
+        except Exception as e:
+            logger.warning(f"Health check failed for '{server_name}': {e}")
+            return False
+
     def get_running_servers(self):
         return list(self.apps.keys())
 
@@ -281,7 +295,21 @@ app.add_middleware(
     allow_headers=["*"],
     allow_methods=["*"]
 )
-manager = MCPServerManager()
+# Define popular servers that don't require environment variables
+POPULAR_SERVERS = {
+    "math-server": {
+        "command": "python",
+        "args": ["simple_math_server.py"],
+        "cwd": os.path.dirname(os.path.abspath(__file__))
+    },
+    "time-server": {
+        "command": "python", 
+        "args": ["simple_time_server.py"],
+        "cwd": os.path.dirname(os.path.abspath(__file__))
+    }
+}
+
+manager = MCPServerManager(popular_servers=POPULAR_SERVERS)
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -376,6 +404,33 @@ async def health_check():
         "running_servers": len(manager.get_running_servers()),
         "servers": manager.get_running_servers()
     }
+
+@app.get("/test_connection/{server_name}")
+async def test_mcp_connection(server_name: str):
+    """Test MCP client connection to a specific server"""
+    if server_name not in manager.sessions:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    
+    try:
+        is_healthy = await manager.check_server_health(server_name)
+        session, _ = manager.sessions[server_name]
+        
+        # List available tools
+        tools_response = await session.list_tools()
+        tools = tools_response.tools if hasattr(tools_response, 'tools') else []
+        
+        return {
+            "status": "success",
+            "server": server_name,
+            "healthy": is_healthy,
+            "tools_count": len(tools),
+            "tools": [{"name": t.name, "description": t.description} for t in tools],
+            "endpoint": f"/mcp/{server_name}/",
+            "last_used": manager.last_used.get(server_name, 0)
+        }
+    except Exception as e:
+        logger.error(f"Connection test failed for '{server_name}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
