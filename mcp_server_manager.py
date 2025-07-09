@@ -2,6 +2,7 @@ import os
 import contextlib
 import asyncio
 import logging
+import time
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -22,11 +23,17 @@ class MCPServerConfig(BaseModel):
     cwd: Optional[str] = None
 
 class MCPServerManager:
-    def __init__(self):
+    def __init__(self, popular_servers: Dict[str, dict] | None = None):
+        """Manage multiple MCP servers and expose them via Streamable HTTP."""
+
+        self.popular_servers = popular_servers or {}
+
         self.apps = {}
         self.session_managers = {}
+        self.session_contexts = {}
         self.routes_added = set()
         self.sessions = {}  # name -> (session, stdio_ctx)
+        self.last_used = {}
     
     async def start_backend(self, config: MCPServerConfig):
         # Prepare environment
@@ -117,7 +124,6 @@ class MCPServerManager:
                 await session_manager.handle_request(scope, receive, send)
             except Exception as e:
                 logger.error(f"ASGI error for {name}: {e}")
-                # Try to send an error response if possible
                 if scope.get('type') == 'http':
                     try:
                         await send({
@@ -130,15 +136,56 @@ class MCPServerManager:
                             'body': f'{{"error": "Server error: {str(e)}"}}'.encode(),
                         })
                     except Exception:
-                        pass  # Response may already be started
+                        pass
+
+        # Start the session manager
+        run_ctx = session_manager.run()
+        await run_ctx.__aenter__()
+        self.session_managers[name] = session_manager
+        self.session_contexts[name] = run_ctx
 
         if endpoint not in self.routes_added:
             fastapi_app.mount(endpoint, streamable_http_asgi)
             self.routes_added.add(endpoint)
 
         self.apps[name] = mcp_app
-        self.session_managers[name] = session_manager
+        self.last_used[name] = time.time()
         return endpoint
+
+    async def ensure_server(self, name: str, cfg: dict, fastapi_app: FastAPI) -> str:
+        """Ensure a server from config is running and return its endpoint."""
+        if name in self.sessions:
+            self.last_used[name] = time.time()
+            return f"/mcp/{name}/"
+
+        config = MCPServerConfig(
+            name=name,
+            command=cfg.get("command"),
+            args=cfg.get("args", []),
+            env=cfg.get("env"),
+            cwd=cfg.get("cwd"),
+        )
+        return await self.add_server(config, fastapi_app)
+
+    async def start_popular_servers(self, fastapi_app: FastAPI):
+        for name, cfg in self.popular_servers.items():
+            try:
+                await self.ensure_server(name, cfg, fastapi_app)
+            except Exception as e:
+                logger.error(f"Failed to start popular server {name}: {e}")
+
+    async def cleanup_loop(self, ttl: int = 600, check_interval: int = 60):
+        while True:
+            now = time.time()
+            for name, last in list(self.last_used.items()):
+                if name in self.popular_servers:
+                    continue
+                if now - last > ttl:
+                    try:
+                        await self.remove_server(name)
+                    except Exception as e:
+                        logger.error(f"Cleanup failed for {name}: {e}")
+            await asyncio.sleep(check_interval)
 
     async def remove_server(self, name: str):
         """Remove a server and clean up its resources"""
@@ -153,11 +200,19 @@ class MCPServerManager:
             await session.__aexit__(None, None, None)
         except Exception as e:
             logger.debug(f"Error closing session for {name}: {e}")
-        
+
         try:
             await stdio_ctx.__aexit__(None, None, None)
         except Exception as e:
             logger.debug(f"Error closing stdio context for {name}: {e}")
+
+        # Stop session manager
+        ctx = self.session_contexts.get(name)
+        if ctx is not None:
+            try:
+                await ctx.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"Error closing session manager for {name}: {e}")
         
         # Remove from tracking
         del self.sessions[name]
@@ -165,6 +220,10 @@ class MCPServerManager:
             del self.apps[name]
         if name in self.session_managers:
             del self.session_managers[name]
+        if name in self.session_contexts:
+            del self.session_contexts[name]
+        if name in self.last_used:
+            del self.last_used[name]
         
         logger.info(f"Server '{name}' removed successfully")
 
@@ -226,8 +285,15 @@ manager = MCPServerManager()
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await manager.shutdown()
+    await manager.start_popular_servers(app)
+    cleanup_task = asyncio.create_task(manager.cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
+        await manager.shutdown()
 
 app.router.lifespan_context = lifespan
 
