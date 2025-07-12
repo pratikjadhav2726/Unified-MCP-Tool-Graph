@@ -172,3 +172,31 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+mcp-chat-agent/node_modules
+
+# next.js
+mcp-chat-agent/.next/
+mcp-chat-agent/out/
+
+# production
+mcp-chat-agent/build
+
+# debug
+mcp-chat-agent/npm-debug.log*
+mcp-chat-agent/yarn-debug.log*
+mcp-chat-agent/yarn-error.log*
+mcp-chat-agent/.pnpm-debug.log*
+
+# env files
+mcp-chat-agent/.env*
+
+# vercel
+mcp-chat-agent/.vercel
+
+# typescript
+mcp-chat-agent/*.tsbuildinfo
+mcp-chat-agent/next-env.d.ts

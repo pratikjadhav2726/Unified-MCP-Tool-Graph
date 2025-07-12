@@ -297,15 +297,23 @@ app.add_middleware(
 )
 # Define popular servers that don't require environment variables
 POPULAR_SERVERS = {
-    "math-server": {
-        "command": "python",
-        "args": ["simple_math_server.py"],
-        "cwd": os.path.dirname(os.path.abspath(__file__))
+    "tavily-mcp": {
+        "command": "npx",
+        "args": ["-y", "tavily-mcp@latest"],
+        "env": {
+            "TAVILY_API_KEY": "your-api-key-here"
+        }
     },
-    "time-server": {
-        "command": "python", 
-        "args": ["simple_time_server.py"],
-        "cwd": os.path.dirname(os.path.abspath(__file__))
+    "sequential-thinking": {
+        "command": "npx",
+        "args": [
+            "-y",
+            "@modelcontextprotocol/server-sequential-thinking"
+        ]
+    },
+    "time": {
+        "command": "uvx",
+        "args": ["mcp-server-time"]
     }
 }
 
