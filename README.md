@@ -259,4 +259,33 @@ Here are the top 5 tools recommended based on your task of creating a LinkedIn p
 Let me know if you'd like step-by-step instructions for any specific tool!
 ```
 
+## MCP Server Proxying with mcp-proxy
+
+This project uses [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) to expose stdio-based MCP servers as HTTP endpoints. `mcp-proxy` acts as a bridge between stdio MCP servers and HTTP clients, supporting both Streamable HTTP and SSE transports.
+
+### How it works
+- MCP servers are launched as subprocesses (stdio) and registered with `mcp-proxy`.
+- Each server is exposed at:
+  - `http://localhost:<port>/servers/<name>/` (Streamable HTTP, POST)
+  - `http://localhost:<port>/servers/<name>/sse` (SSE, GET)
+- The official MCP Python SDK can connect to the `/sse` endpoint using `sse_client`:
+
+```python
+from mcp.client.sse import sse_client
+from mcp.client.session import ClientSession
+import asyncio
+
+async def main():
+    mcp_url = "http://localhost:9000/servers/time/sse"
+    async with sse_client(mcp_url) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            # ... interact with the server ...
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for more details on configuration and advanced usage.
+
 

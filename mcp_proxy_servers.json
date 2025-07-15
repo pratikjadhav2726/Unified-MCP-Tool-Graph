@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "tavily-mcp": {
+      "enabled": true,
+      "command": "npx",
+      "args": [
+        "-y",
+        "tavily-mcp@latest"
+      ],
+      "env": {
+        "TAVILY_API_KEY": "your-api-key-here"
+      },
+      "transportType": "stdio"
+    },
+    "sequential-thinking": {
+      "enabled": true,
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {},
+      "transportType": "stdio"
+    },
+    "time": {
+      "enabled": true,
+      "command": "uvx",
+      "args": [
+        "mcp-server-time"
+      ],
+      "env": {},
+      "transportType": "stdio"
+    }
+  }
+}
