@@ -1,451 +1,133 @@
 import os
-import contextlib
-import asyncio
+import json
+import subprocess
 import logging
 import time
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import Dict, List, Optional
-from mcp.server.fastmcp import FastMCP
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from mcp.client.session import ClientSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class MCPServerConfig(BaseModel):
-    name: str
-    command: str
-    args: List[str] = []
-    env: Optional[Dict[str, str]] = {}
-    cwd: Optional[str] = None
+CONFIG_FILE = "mcp_proxy_servers.json"
+
+class MCPServerConfig:
+    def __init__(self, name, command, args=None, env=None, cwd=None):
+        self.name = name
+        self.command = command
+        self.args = args or []
+        self.env = env or {}
+        self.cwd = cwd
+
+    def to_proxy_dict(self):
+        return {
+            "enabled": True,
+            "command": self.command,
+            "args": self.args,
+            "env": self.env,
+            "transportType": "stdio"
+        }
 
 class MCPServerManager:
-    def __init__(self, popular_servers: Dict[str, dict] | None = None):
-        """Manage multiple MCP servers and expose them via Streamable HTTP."""
+    def __init__(self, popular_servers: Dict[str, dict], proxy_port: int = 9000):
+        self.popular_servers = popular_servers
+        self.dynamic_servers = {}  # name -> config
+        self.last_used = {}        # name -> timestamp
+        self.proxy_port = proxy_port
+        self.proxy_proc = None
 
-        self.popular_servers = popular_servers or {}
+    def _build_proxy_config(self):
+        servers = {}
+        for name, cfg in {**self.popular_servers, **self.dynamic_servers}.items():
+            servers[name] = MCPServerConfig(name, **cfg).to_proxy_dict()
+        return {"mcpServers": servers}
 
-        self.apps = {}
-        self.session_managers = {}
-        self.session_contexts = {}
-        self.routes_added = set()
-        self.sessions = {}  # name -> (session, stdio_ctx)
-        self.last_used = {}
-    
-    async def start_backend(self, config: MCPServerConfig):
-        # Prepare environment
-        env = os.environ.copy()
-        if config.env:
-            env.update(config.env)
-        
-        # For npm packages, ensure NODE_ENV is set
-        if config.command in ["npx", "npm"]:
-            env.setdefault("NODE_ENV", "production")
-            env.setdefault("NPM_CONFIG_LOGLEVEL", "warn")
-        
-        params = StdioServerParameters(
-            command=config.command,
-            args=config.args or [],
-            env=env,
-            cwd=config.cwd or os.getcwd()
-        )
-        
-        # Use MCP SDK's stdio_client to launch the subprocess and get streams
-        logger.debug(f"[start_backend] Creating stdio_ctx for {config.name}")
-        stdio_ctx = stdio_client(params)
-        read_stream, write_stream = await stdio_ctx.__aenter__()
-        logger.debug(f"[start_backend] stdio_ctx __aenter__ complete for {config.name}")
-        session = ClientSession(read_stream, write_stream)
-        await session.__aenter__()
-        logger.debug(f"[start_backend] ClientSession __aenter__ complete for {config.name}")
-        
-        try:
-            # Add a small delay to let the server start
-            await asyncio.sleep(1.0)
-            await asyncio.wait_for(session.initialize(), timeout=30.0)
-            logger.info(f"Session initialized successfully for '{config.name}'")
-        except Exception as e:
-            logger.error(f"Session initialization failed for '{config.name}': {e}")
-            logger.debug(f"[start_backend] Cleaning up session and stdio_ctx for {config.name} after failure")
-            await session.__aexit__(None, None, None)
-            await stdio_ctx.__aexit__(None, None, None)
-            raise
-        
-        return session, stdio_ctx
+    def _write_proxy_config(self):
+        config = self._build_proxy_config()
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Wrote mcp-proxy config with servers: {list(config['mcpServers'].keys())}")
 
-    async def add_server(self, config: MCPServerConfig, fastapi_app: FastAPI):
-        name = config.name
-        logger.debug(f"[add_server] Called for {name}")
-        if name in self.apps:
-            endpoint = f"/mcp/{name}/"
-            logger.debug(f"[add_server] {name} already exists, endpoint: {endpoint}")
-            return endpoint
-        session, stdio_ctx = await self.start_backend(config)
-        logger.debug(f"[add_server] Storing session and stdio_ctx for {name}")
-        self.sessions[name] = (session, stdio_ctx)
-        mcp_app = FastMCP(name, stateless_http=True)
-        logger.debug(f"[add_server] Created FastMCP app for {name}")
-        try:
-            tools_response = await session.list_tools()
-            tools = tools_response.tools if hasattr(tools_response, 'tools') else []
-            logger.info(f"Server '{name}' has {len(tools)} tools available: {[t.name for t in tools]}")
-            @mcp_app.tool(description=f"Proxy to persistent {name} MCP server")
-            async def proxy_tool(tool_name: str, **kwargs):
-                logger.debug(f"[proxy_tool] {name}: Calling tool {tool_name} with kwargs {kwargs}")
-                try:
-                    result = await session.call_tool(tool_name, kwargs)
-                    logger.debug(f"[proxy_tool] {name}: Tool {tool_name} result: {result}")
-                    return result
-                except Exception as e:
-                    logger.error(f"Error calling tool {tool_name} on {name}: {e}")
-                    logger.debug(f"[proxy_tool] {name}: Exception details: {e}")
-                    raise
-        except Exception as e:
-            logger.warning(f"Could not list tools for '{name}': {e}")
-            @mcp_app.tool(description=f"Proxy to persistent {name} MCP server")
-            async def proxy_tool(tool_name: str, **kwargs):
-                logger.debug(f"[proxy_tool] {name}: (fallback) Calling tool {tool_name} with kwargs {kwargs}")
-                try:
-                    result = await session.call_tool(tool_name, kwargs)
-                    logger.debug(f"[proxy_tool] {name}: (fallback) Tool {tool_name} result: {result}")
-                    return result
-                except Exception as e:
-                    logger.error(f"Error calling tool {tool_name} on {name}: {e}")
-                    logger.debug(f"[proxy_tool] {name}: (fallback) Exception details: {e}")
-                    raise
-        session_manager = StreamableHTTPSessionManager(app=mcp_app)
-        logger.debug(f"[add_server] Created StreamableHTTPSessionManager for {name}")
-        endpoint = f"/mcp/{name}/"
-        async def streamable_http_asgi(scope, receive, send):
-            logger.debug(f"[ASGI] Entered handler for {name}, scope: {scope}")
-            try:
-                logger.debug(f"[ASGI] Handling request for {name}")
-                await session_manager.handle_request(scope, receive, send)
-                logger.debug(f"[ASGI] Finished handle_request for {name}")
-            except Exception as e:
-                logger.error(f"ASGI error for {name}: {e}")
-                logger.debug(f"[ASGI] Exception details: {e}")
-                if scope.get('type') == 'http':
-                    try:
-                        await send({
-                            'type': 'http.response.start',
-                            'status': 500,
-                            'headers': [(b'content-type', b'application/json')],
-                        })
-                        await send({
-                            'type': 'http.response.body',
-                            'body': f'{{"error": "Server error: {str(e)}"}}'.encode(),
-                        })
-                        logger.debug(f"[ASGI] Sent error response for {name}")
-                    except Exception as send_exc:
-                        logger.error(f"[ASGI] Error sending error response: {send_exc}")
-        run_ctx = session_manager.run()
-        logger.debug(f"[add_server] Entering session_manager.run() context for {name}")
-        await run_ctx.__aenter__()
-        self.session_managers[name] = session_manager
-        self.session_contexts[name] = run_ctx
-        if endpoint not in self.routes_added:
-            logger.debug(f"[add_server] Mounting endpoint {endpoint} for {name}")
-            fastapi_app.mount(endpoint, streamable_http_asgi)
-            self.routes_added.add(endpoint)
-        self.apps[name] = mcp_app
+    def _start_proxy(self):
+        if self.proxy_proc:
+            logger.info("Stopping existing mcp-proxy...")
+            self.proxy_proc.terminate()
+            self.proxy_proc.wait()
+        cmd = [
+            "mcp-proxy",
+            f"--port={self.proxy_port}",
+            "--named-server-config", CONFIG_FILE
+        ]
+        logger.info(f"Starting mcp-proxy: {' '.join(cmd)}")
+        self.proxy_proc = subprocess.Popen(cmd)
+        logger.info(f"mcp-proxy started on port {self.proxy_port}")
+
+    def start(self):
+        self._write_proxy_config()
+        self._start_proxy()
+
+    def stop(self):
+        if self.proxy_proc:
+            logger.info("Stopping mcp-proxy...")
+            self.proxy_proc.terminate()
+            self.proxy_proc.wait()
+            self.proxy_proc = None
+
+    def add_server(self, name, config):
+        logger.info(f"Adding server {name}")
+        self.dynamic_servers[name] = config
         self.last_used[name] = time.time()
-        logger.debug(f"[add_server] Completed setup for {name}, endpoint: {endpoint}")
-        return endpoint
+        self._write_proxy_config()
+        self._start_proxy()
 
-    async def ensure_server(self, name: str, cfg: dict, fastapi_app: FastAPI) -> str:
-        """Ensure a server from config is running and return its endpoint."""
-        if name in self.sessions:
-            self.last_used[name] = time.time()
-            return f"/mcp/{name}/"
-
-        config = MCPServerConfig(
-            name=name,
-            command=str(cfg.get("command", "")),
-            args=cfg.get("args") or [],
-            env=cfg.get("env") or {},
-            cwd=cfg.get("cwd"),
-        )
-        return await self.add_server(config, fastapi_app)
-
-    async def start_popular_servers(self, fastapi_app: FastAPI):
-        for name, cfg in self.popular_servers.items():
-            try:
-                await self.ensure_server(name, cfg, fastapi_app)
-            except Exception as e:
-                logger.error(f"Failed to start popular server {name}: {e}")
-
-    async def cleanup_loop(self, ttl: int = 600, check_interval: int = 60):
-        while True:
-            now = time.time()
-            for name, last in list(self.last_used.items()):
-                if name in self.popular_servers:
-                    continue
-                if now - last > ttl:
-                    try:
-                        await self.remove_server(name)
-                    except Exception as e:
-                        logger.error(f"Cleanup failed for {name}: {e}")
-            await asyncio.sleep(check_interval)
-
-    async def remove_server(self, name: str):
-        """Remove a server and clean up its resources"""
-        if name not in self.sessions:
-            raise ValueError(f"Server '{name}' not found")
-        
-        logger.info(f"Removing server '{name}'")
-        
-        # Clean up session
-        session, stdio_ctx = self.sessions[name]
-        try:
-            logger.debug(f"[remove_server] Closing session for {name}")
-            await session.__aexit__(None, None, None)
-        except Exception as e:
-            logger.debug(f"Error closing session for {name}: {e}")
-
-        try:
-            logger.debug(f"[remove_server] Closing stdio_ctx for {name}")
-            await stdio_ctx.__aexit__(None, None, None)
-        except Exception as e:
-            logger.debug(f"Error closing stdio context for {name}: {e}")
-
-        # Stop session manager
-        ctx = self.session_contexts.get(name)
-        if ctx is not None:
-            try:
-                await ctx.__aexit__(None, None, None)
-            except Exception as e:
-                logger.debug(f"Error closing session manager for {name}: {e}")
-        
-        # Remove from tracking
-        del self.sessions[name]
-        if name in self.apps:
-            del self.apps[name]
-        if name in self.session_managers:
-            del self.session_managers[name]
-        if name in self.session_contexts:
-            del self.session_contexts[name]
+    def remove_server(self, name):
+        logger.info(f"Removing server {name}")
+        if name in self.dynamic_servers:
+            del self.dynamic_servers[name]
         if name in self.last_used:
             del self.last_used[name]
-        
-        logger.info(f"Server '{name}' removed successfully")
+        self._write_proxy_config()
+        self._start_proxy()
 
-    async def shutdown(self):
-        """Clean up all MCP sessions and subprocesses"""
-        logger.info("Shutting down all servers")
-        server_names = list(self.sessions.keys())
-        for name in server_names:
-            try:
-                await self.remove_server(name)
-            except Exception as e:
-                logger.error(f"Error during shutdown of server {name}: {e}")
-        
-        # Clear all tracking dictionaries
-        self.sessions = {}
-        self.apps = {}
-        self.session_managers = {}
-        self.routes_added = set()
+    def mark_used(self, name):
+        self.last_used[name] = time.time()
 
-    async def check_server_health(self, server_name: str) -> bool:
-        """Check if a server is healthy and responsive"""
-        if server_name not in self.sessions:
-            return False
-        
-        session, _ = self.sessions[server_name]
-        try:
-            # Try to list tools as a health check (this is a reliable method)
-            await asyncio.wait_for(session.list_tools(), timeout=5.0)
-            return True
-        except Exception as e:
-            logger.warning(f"Health check failed for '{server_name}': {e}")
-            return False
+    def cleanup_idle(self, ttl=600):
+        now = time.time()
+        to_remove = [name for name, last in self.last_used.items()
+                     if name not in self.popular_servers and now - last > ttl]
+        for name in to_remove:
+            self.remove_server(name)
 
-    def get_running_servers(self):
-        return list(self.apps.keys())
-
-    async def call_tool_direct(self, server_name: str, tool_name: str, params: dict):
-        """Direct tool call via the session (bypass HTTP)"""
-        if server_name not in self.sessions:
-            raise ValueError(f"Server '{server_name}' not found")
-        
-        session, _ = self.sessions[server_name]
-        try:
-            result = await session.call_tool(tool_name, params)
-            return result
-        except Exception as e:
-            logger.error(f"Tool call failed for '{tool_name}' on '{server_name}': {e}")
-            raise
-
-    async def list_tools_direct(self, server_name: str):
-        """List tools directly via the session"""
-        if server_name not in self.sessions:
-            raise ValueError(f"Server '{server_name}' not found")
-        
-        session, _ = self.sessions[server_name]
-        try:
-            result = await session.list_tools()
-            return result
-        except Exception as e:
-            logger.error(f"List tools failed for '{server_name}': {e}")
-            raise
-
-# --- FastAPI App wiring ---
-
-app = FastAPI(title="Dynamic MCP Server Manager")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_headers=["*"],
-    allow_methods=["*"]
-)
-# Define popular servers that don't require environment variables
-POPULAR_SERVERS = {
-    "tavily-mcp": {
-        "command": "npx",
-        "args": ["-y", "tavily-mcp@latest"],
-        "env": {
-            "TAVILY_API_KEY": "your-api-key-here"
-        }
-    },
-    "sequential-thinking": {
-        "command": "npx",
-        "args": [
-            "-y",
-            "@modelcontextprotocol/server-sequential-thinking"
-        ]
-    },
-    "time": {
-        "command": "uvx",
-        "args": ["mcp-server-time"]
-    }
-}
-
-manager = MCPServerManager(popular_servers=POPULAR_SERVERS)
-
-@contextlib.asynccontextmanager
-async def lifespan(app: FastAPI):
-    await manager.start_popular_servers(app)
-    cleanup_task = asyncio.create_task(manager.cleanup_loop())
-    try:
-        yield
-    finally:
-        cleanup_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cleanup_task
-        await manager.shutdown()
-
-app.router.lifespan_context = lifespan
-
-@app.post("/add_server")
-async def add_mcp_server(config: MCPServerConfig, request: Request):
-    try:
-        endpoint = await manager.add_server(config, app)
+    def get_endpoints(self):
         return {
-            "endpoint": str(request.base_url).rstrip("/") + endpoint,
-            "name": config.name,
-            "status": "success"
+            name: f"http://localhost:{self.proxy_port}/servers/{name}/"
+            for name in {**self.popular_servers, **self.dynamic_servers}
         }
-    except Exception as e:
-        logger.error(f"Failed to add server '{config.name}': {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/remove_server/{name}")
-async def remove_mcp_server(name: str):
-    try:
-        await manager.remove_server(name)
-        return {"status": "success", "message": f"Server '{name}' removed"}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to remove server '{name}': {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/list_servers")
-def list_servers():
-    return {
-        "servers": [
-            {"name": name, "endpoint": f"/mcp/{name}/"}
-            for name in manager.apps
-        ]
-    }
-
-@app.post("/call_tool/{server_name}")
-async def call_tool_direct(server_name: str, payload: dict):
-    """Direct tool call endpoint (bypass HTTP streaming)"""
-    tool_name = payload.get("tool")
-    params = payload.get("params", {})
-    
-    if not tool_name:
-        raise HTTPException(status_code=400, detail="Missing 'tool' in payload")
-    
-    try:
-        result = await manager.call_tool_direct(server_name, tool_name, params)
-        return {
-            "status": "success",
-            "tool": tool_name,
-            "server": server_name,
-            "result": result
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Tool call failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/list_tools/{server_name}")
-async def list_tools_endpoint(server_name: str):
-    """List tools for a specific server"""
-    try:
-        result = await manager.list_tools_direct(server_name)
-        return {
-            "status": "success",
-            "server": server_name,
-            "tools": result
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"List tools failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "running_servers": len(manager.get_running_servers()),
-        "servers": manager.get_running_servers()
-    }
-
-@app.get("/test_connection/{server_name}")
-async def test_mcp_connection(server_name: str):
-    """Test MCP client connection to a specific server"""
-    if server_name not in manager.sessions:
-        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
-    
-    try:
-        is_healthy = await manager.check_server_health(server_name)
-        session, _ = manager.sessions[server_name]
-        
-        # List available tools
-        tools_response = await session.list_tools()
-        tools = tools_response.tools if hasattr(tools_response, 'tools') else []
-        
-        return {
-            "status": "success",
-            "server": server_name,
-            "healthy": is_healthy,
-            "tools_count": len(tools),
-            "tools": [{"name": t.name, "description": t.description} for t in tools],
-            "endpoint": f"/mcp/{server_name}/",
-            "last_used": manager.last_used.get(server_name, 0)
-        }
-    except Exception as e:
-        logger.error(f"Connection test failed for '{server_name}': {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    POPULAR_SERVERS = {
+        "tavily-mcp": {
+            "command": "npx",
+            "args": ["-y", "tavily-mcp@latest"],
+            "env": {"TAVILY_API_KEY": "your-api-key-here"}
+        },
+        "sequential-thinking": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+        },
+        "time": {
+            "command": "uvx",
+            "args": ["mcp-server-time"]
+        }
+    }
+    manager = MCPServerManager(popular_servers=POPULAR_SERVERS, proxy_port=9000)
+    try:
+        manager.start()
+        logger.info("MCP Proxy Manager running. Press Ctrl+C to stop.")
+        while True:
+            time.sleep(60)
+            manager.cleanup_idle(ttl=600)
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    finally:
+        manager.stop()
