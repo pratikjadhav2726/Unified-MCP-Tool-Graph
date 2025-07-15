@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class MCPServerConfig(BaseModel):
     name: str
     command: str
-    args: Optional[List[str]] = []
+    args: List[str] = []
     env: Optional[Dict[str, str]] = {}
     cwd: Optional[str] = None
 
@@ -48,16 +48,19 @@ class MCPServerManager:
         
         params = StdioServerParameters(
             command=config.command,
-            args=config.args,
+            args=config.args or [],
             env=env,
             cwd=config.cwd or os.getcwd()
         )
         
         # Use MCP SDK's stdio_client to launch the subprocess and get streams
+        logger.debug(f"[start_backend] Creating stdio_ctx for {config.name}")
         stdio_ctx = stdio_client(params)
         read_stream, write_stream = await stdio_ctx.__aenter__()
+        logger.debug(f"[start_backend] stdio_ctx __aenter__ complete for {config.name}")
         session = ClientSession(read_stream, write_stream)
         await session.__aenter__()
+        logger.debug(f"[start_backend] ClientSession __aenter__ complete for {config.name}")
         
         try:
             # Add a small delay to let the server start
@@ -66,6 +69,7 @@ class MCPServerManager:
             logger.info(f"Session initialized successfully for '{config.name}'")
         except Exception as e:
             logger.error(f"Session initialization failed for '{config.name}': {e}")
+            logger.debug(f"[start_backend] Cleaning up session and stdio_ctx for {config.name} after failure")
             await session.__aexit__(None, None, None)
             await stdio_ctx.__aexit__(None, None, None)
             raise
@@ -74,56 +78,56 @@ class MCPServerManager:
 
     async def add_server(self, config: MCPServerConfig, fastapi_app: FastAPI):
         name = config.name
+        logger.debug(f"[add_server] Called for {name}")
         if name in self.apps:
             endpoint = f"/mcp/{name}/"
+            logger.debug(f"[add_server] {name} already exists, endpoint: {endpoint}")
             return endpoint
-
         session, stdio_ctx = await self.start_backend(config)
+        logger.debug(f"[add_server] Storing session and stdio_ctx for {name}")
         self.sessions[name] = (session, stdio_ctx)
-
-        # Create the FastMCP app with stateless HTTP
         mcp_app = FastMCP(name, stateless_http=True)
-
-        # Get available tools and register a proxy for each
+        logger.debug(f"[add_server] Created FastMCP app for {name}")
         try:
             tools_response = await session.list_tools()
             tools = tools_response.tools if hasattr(tools_response, 'tools') else []
             logger.info(f"Server '{name}' has {len(tools)} tools available: {[t.name for t in tools]}")
-            
-            # Register a single proxy tool that handles all tool calls
             @mcp_app.tool(description=f"Proxy to persistent {name} MCP server")
             async def proxy_tool(tool_name: str, **kwargs):
-                """Proxy tool that forwards calls to the persistent MCP server"""
+                logger.debug(f"[proxy_tool] {name}: Calling tool {tool_name} with kwargs {kwargs}")
                 try:
                     result = await session.call_tool(tool_name, kwargs)
+                    logger.debug(f"[proxy_tool] {name}: Tool {tool_name} result: {result}")
                     return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name} on {name}: {e}")
+                    logger.debug(f"[proxy_tool] {name}: Exception details: {e}")
                     raise
-                    
         except Exception as e:
             logger.warning(f"Could not list tools for '{name}': {e}")
-            
-            # Register a generic proxy tool even if we can't list tools
             @mcp_app.tool(description=f"Proxy to persistent {name} MCP server")
             async def proxy_tool(tool_name: str, **kwargs):
-                """Proxy tool that forwards calls to the persistent MCP server"""
+                logger.debug(f"[proxy_tool] {name}: (fallback) Calling tool {tool_name} with kwargs {kwargs}")
                 try:
                     result = await session.call_tool(tool_name, kwargs)
+                    logger.debug(f"[proxy_tool] {name}: (fallback) Tool {tool_name} result: {result}")
                     return result
                 except Exception as e:
                     logger.error(f"Error calling tool {tool_name} on {name}: {e}")
+                    logger.debug(f"[proxy_tool] {name}: (fallback) Exception details: {e}")
                     raise
-
-        # Create session manager
         session_manager = StreamableHTTPSessionManager(app=mcp_app)
+        logger.debug(f"[add_server] Created StreamableHTTPSessionManager for {name}")
         endpoint = f"/mcp/{name}/"
-
         async def streamable_http_asgi(scope, receive, send):
+            logger.debug(f"[ASGI] Entered handler for {name}, scope: {scope}")
             try:
+                logger.debug(f"[ASGI] Handling request for {name}")
                 await session_manager.handle_request(scope, receive, send)
+                logger.debug(f"[ASGI] Finished handle_request for {name}")
             except Exception as e:
                 logger.error(f"ASGI error for {name}: {e}")
+                logger.debug(f"[ASGI] Exception details: {e}")
                 if scope.get('type') == 'http':
                     try:
                         await send({
@@ -135,21 +139,21 @@ class MCPServerManager:
                             'type': 'http.response.body',
                             'body': f'{{"error": "Server error: {str(e)}"}}'.encode(),
                         })
-                    except Exception:
-                        pass
-
-        # Start the session manager
+                        logger.debug(f"[ASGI] Sent error response for {name}")
+                    except Exception as send_exc:
+                        logger.error(f"[ASGI] Error sending error response: {send_exc}")
         run_ctx = session_manager.run()
+        logger.debug(f"[add_server] Entering session_manager.run() context for {name}")
         await run_ctx.__aenter__()
         self.session_managers[name] = session_manager
         self.session_contexts[name] = run_ctx
-
         if endpoint not in self.routes_added:
+            logger.debug(f"[add_server] Mounting endpoint {endpoint} for {name}")
             fastapi_app.mount(endpoint, streamable_http_asgi)
             self.routes_added.add(endpoint)
-
         self.apps[name] = mcp_app
         self.last_used[name] = time.time()
+        logger.debug(f"[add_server] Completed setup for {name}, endpoint: {endpoint}")
         return endpoint
 
     async def ensure_server(self, name: str, cfg: dict, fastapi_app: FastAPI) -> str:
@@ -160,9 +164,9 @@ class MCPServerManager:
 
         config = MCPServerConfig(
             name=name,
-            command=cfg.get("command"),
-            args=cfg.get("args", []),
-            env=cfg.get("env"),
+            command=str(cfg.get("command", "")),
+            args=cfg.get("args") or [],
+            env=cfg.get("env") or {},
             cwd=cfg.get("cwd"),
         )
         return await self.add_server(config, fastapi_app)
@@ -197,11 +201,13 @@ class MCPServerManager:
         # Clean up session
         session, stdio_ctx = self.sessions[name]
         try:
+            logger.debug(f"[remove_server] Closing session for {name}")
             await session.__aexit__(None, None, None)
         except Exception as e:
             logger.debug(f"Error closing session for {name}: {e}")
 
         try:
+            logger.debug(f"[remove_server] Closing stdio_ctx for {name}")
             await stdio_ctx.__aexit__(None, None, None)
         except Exception as e:
             logger.debug(f"Error closing stdio context for {name}: {e}")
