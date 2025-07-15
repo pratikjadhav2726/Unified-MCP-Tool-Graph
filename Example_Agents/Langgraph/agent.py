@@ -15,7 +15,7 @@ from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import InMemorySaver
 import os
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from typing import Any, AsyncIterable, Literal
 
 class ResponseFormat(BaseModel):
@@ -64,10 +64,13 @@ class ReactAgent:
         self.config = self.load_config(config_path)
         self.memory = InMemorySaver()
         """In-memory checkpointer for saving and loading LangGraph state."""
+        api_key = os.getenv("GROQ_API_KEY")
+        if api_key is not None:
+            api_key = SecretStr(api_key)
         self.model = ChatGroq(
             temperature=0,
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_name="qwen-qwq-32b"
+            api_key=api_key,
+            model="deepseek-r1-distill-llama-70b"
         )
         """The language model used by the agent (ChatGroq)."""
         self.client: MultiServerMCPClient | None = None
@@ -100,25 +103,15 @@ class ReactAgent:
             raise
 
     async def __aenter__(self):
-        """
-        Async context manager entry: initializes MCP client and agent, keeps connection open for agent lifetime.
-        """
         self.client = MultiServerMCPClient(self.config.get("mcpServers"))
-        await self.client.__aenter__()
-        tools = self.client.get_tools()
-        print("[DEBUG] Loaded tools:", [(t.name, type(t)) for t in tools])  # Debug print
+        tools = await self.client.get_tools()
+        print("[DEBUG] Loaded tools:", [(t.name, type(t)) for t in tools])
         self.agent = create_react_agent(
-            self.model, tools=tools, prompt=self.SYSTEM_INSTRUCTION, # type: ignore
-            checkpointer=self.memory
+            self.model, tools=tools, prompt=self.SYSTEM_INSTRUCTION, checkpointer=self.memory
         )
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        """
-        Async context manager exit: closes MCP client connection.
-        """
-        if self.client:
-            await self.client.__aexit__(exc_type, exc, tb)
         self.client = None
         self.agent = None
 
@@ -130,22 +123,9 @@ class ReactAgent:
     def invoke(self, query: str, sessionId: str) -> dict:
         """
         Invokes the LangGraph agent with a user query in a synchronous manner.
-
-        Args:
-            query: The user's query string.
-            sessionId: A unique identifier for the current session/thread.
-
-        Returns:
-            A dictionary containing the agent's final response, formatted by
-            `get_agent_response`.
+        (Disabled for standalone test runner; use async streaming instead.)
         """
-        config = {"configurable": {"thread_id": sessionId}}
-        try:
-            self.agent.invoke({"messages": [("user", query)]}, config)
-            return self.get_agent_response(config)
-        except Exception as e:
-            print(f"[ERROR] Agent invocation failed: {e}")
-            return {"is_task_complete": False, "require_user_input": True, "content": str(e)}
+        raise NotImplementedError("Synchronous invoke is not supported in standalone mode. Use async streaming.")
 
     async def stream(self, query: str, sessionId: str) -> AsyncIterable[dict[str, Any]]:
         """
@@ -167,7 +147,10 @@ class ReactAgent:
         """
         inputs = {'messages': [('user', query)]}
         config = {'configurable': {'thread_id': sessionId}}
-        async for item in self.agent.astream(inputs, config=config):
+        if not self.agent:
+            raise RuntimeError("Agent is not initialized. Use 'async with ReactAgent' context.")
+        # Type ignore to satisfy linter for RunnableConfig
+        async for item in self.agent.astream(inputs, config=config):  # type: ignore
             print("[DEBUG] LangGraph agent stream item:", item)  # Debug print
 
             # Check for structured/tool response
@@ -213,41 +196,21 @@ class ReactAgent:
         """
         Retrieves the current state of the agent for a given configuration
         and formats the last message as the response.
-
-        Args:
-            config: The configuration dictionary, typically containing the thread_id,
-                    used to fetch the agent's state.
-
-        Returns:
-            A dictionary with the agent's response:
-            - "is_task_complete" (bool): True if a message is found, False otherwise.
-            - "require_user_input" (bool): False if a message is found, True otherwise.
-            - "content" (str): The content of the last message, or an error message.
+        (Disabled for standalone test runner; use async streaming instead.)
         """
-        state = self.agent.get_state(config)
-        # Try to extract a structured/tool response if present
-        structured_response = state.values.get('structured_response')
-        if structured_response:
-            if hasattr(structured_response, 'dict'):
-                structured_response = structured_response.dict()
-            status = structured_response.get('status', 'completed')
-            message = structured_response.get('message', '')
-            return {
-                'is_task_complete': status == 'completed',
-                'require_user_input': status == 'input_required',
-                'content': message,
-            }
-        # Fallback: extract last message content
-        messages = state.values.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            return {
-                "is_task_complete": True,
-                "require_user_input": False,
-                "content": getattr(last_msg, "content", str(last_msg))
-            }
-        return {
-            "is_task_complete": False,
-            "require_user_input": True,
-            "content": "Unable to process your request at the moment."
-        }
+        raise NotImplementedError("get_agent_response is not supported in standalone mode. Use async streaming.")
+
+# --- Add a minimal test runner at the bottom ---
+if __name__ == "__main__":
+    import asyncio
+    import sys
+
+    async def test_agent():
+        config_path = sys.argv[1] if len(sys.argv) > 1 else "mcp_server_config.json"
+        async with ReactAgent(config_path) as agent:
+            user_query = input("Enter your query: ")
+            session_id = "test-session"
+            async for result in agent.stream(user_query, session_id):
+                print(result)
+
+    asyncio.run(test_agent())
