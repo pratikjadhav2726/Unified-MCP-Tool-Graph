@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = "mcp_proxy_servers.json"
+CLIENT_CONFIG_FILE = "mcp_client_config.json"
 
 class MCPServerConfig:
     def __init__(self, name, command, args=None, env=None, cwd=None):
@@ -46,6 +47,9 @@ class MCPServerManager:
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
         logger.info(f"Wrote mcp-proxy config with servers: {list(config['mcpServers'].keys())}")
+        
+        # Also write client configuration
+        self._write_client_config()
 
     def _start_proxy(self):
         if self.proxy_proc:
@@ -104,6 +108,39 @@ class MCPServerManager:
             for name in {**self.popular_servers, **self.dynamic_servers}
         }
 
+    def get_client_endpoints(self):
+        """Get SSE endpoints for MCP clients to connect to."""
+        return {
+            name: f"http://localhost:{self.proxy_port}/servers/{name}/sse"
+            for name in {**self.popular_servers, **self.dynamic_servers}
+        }
+
+    def get_client_config_path(self):
+        """Get the path to the generated client configuration file."""
+        return CLIENT_CONFIG_FILE
+
+    def _build_client_config(self):
+        """Build client configuration for connecting to MCP servers via proxy."""
+        servers = {}
+        for name in {**self.popular_servers, **self.dynamic_servers}.keys():
+            servers[name] = {
+                "type": "sse",
+                "url": f"http://localhost:{self.proxy_port}/servers/{name}/sse",
+                "timeout": 5,
+                "sse_read_timeout": 300
+            }
+        return {"mcpServers": servers}
+
+    def _write_client_config(self):
+        """Write client configuration file for MCP clients to connect to servers."""
+        config = self._build_client_config()
+        with open(CLIENT_CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Wrote MCP client config with {len(config['mcpServers'])} server endpoints")
+
+    def update_client_config(self):
+        self._write_client_config()
+
 if __name__ == "__main__":
     POPULAR_SERVERS = {
         "tavily-mcp": {
@@ -123,6 +160,21 @@ if __name__ == "__main__":
     manager = MCPServerManager(popular_servers=POPULAR_SERVERS, proxy_port=9000)
     try:
         manager.start()
+        
+        # Add the fetch server dynamically
+        fetch_server_config = {
+            "command": "uvx",
+            "args": ["mcp-server-fetch"]
+        }
+        manager.add_server("fetch", fetch_server_config)
+        
+        # Display client endpoints
+        client_endpoints = manager.get_client_endpoints()
+        logger.info("Available MCP client endpoints:")
+        for name, endpoint in client_endpoints.items():
+            logger.info(f"  {name}: {endpoint}")
+        
+        logger.info(f"Client configuration written to: {manager.get_client_config_path()}")
         logger.info("MCP Proxy Manager running. Press Ctrl+C to stop.")
         while True:
             time.sleep(60)
