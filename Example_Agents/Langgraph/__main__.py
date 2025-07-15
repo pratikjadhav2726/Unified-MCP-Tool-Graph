@@ -4,8 +4,8 @@ import click
 import uvicorn
 from dotenv import load_dotenv
 from a2a.types import AgentCapabilities, AgentSkill
-from langgraph_server_utils import create_langgraph_agent_a2a_server
-from agent import ReactAgent
+from .langgraph_server_utils import create_langgraph_agent_a2a_server
+from .agent import ReactAgent
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)

@@ -40,11 +40,13 @@ class GenericLangGraphExecutor(AgentExecutor):
         self.agent_init_kwargs = agent_init_kwargs or {}
         self.agent = None  # Lazy initialization
         
-    def _get_agent(self):
-        """Lazy initialization of the agent instance."""
+    async def _get_agent(self):
+        """Async initialization of the agent instance using context manager."""
         if self.agent is None:
             try:
-                self.agent = self.agent_class(*self.agent_init_args, **self.agent_init_kwargs)
+                agent = self.agent_class(*self.agent_init_args, **self.agent_init_kwargs)
+                # Always enter the async context manager for proper initialization
+                self.agent = await agent.__aenter__()
                 logger.info(f"Initialized {self.agent_name}")
             except Exception as e:
                 logger.error(f"Failed to initialize {self.agent_name}: {e}")
@@ -74,8 +76,8 @@ class GenericLangGraphExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.contextId)
         
         try:
-            # Get the agent instance
-            agent = self._get_agent()
+            # Get the agent instance (async)
+            agent = await self._get_agent()
             
             # Stream the LangGraph workflow
             async for item in agent.stream(query, task.contextId):

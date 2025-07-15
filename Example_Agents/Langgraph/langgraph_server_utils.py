@@ -13,7 +13,7 @@ from a2a.types import (
 )
 from dotenv import load_dotenv
 
-from generic_langgraph_executor import create_langgraph_executor
+from .generic_langgraph_executor import create_langgraph_executor
 
 load_dotenv()
 
