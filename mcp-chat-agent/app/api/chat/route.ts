@@ -1,114 +1,86 @@
-import { groq } from "@ai-sdk/groq"
-import { streamText, tool } from "ai"
+import { NextRequest } from "next/server"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { z } from "zod"
+import fs from "fs/promises"
+import path from "path"
 
-// Allow streaming responses up to 30 seconds
 export const maxDuration = 30
 
-export async function POST(req: Request) {
-  const { messages } = await req.json()
-
-  // Simulate MCP tool discovery and orchestration
-  const result = streamText({
-    model: groq("llama-3.1-70b-versatile"),
-    system: `You are an intelligent MCP Tool Graph Agent. You have access to a dynamic ecosystem of tools through the Model Context Protocol (MCP).
-
-Your capabilities include:
-- Dynamic tool discovery based on user queries
-- Orchestrating multiple MCP servers
-- Using semantic search to find the best tools
-- Providing transparent explanations of your tool usage
-
-When responding:
-1. Analyze the user's query to understand their needs
-2. Explain which tools you would discover and use
-3. Simulate tool execution with realistic results
-4. Be transparent about your reasoning process
-
-Available tool categories:
-- Search tools (web search, knowledge retrieval)
-- Reasoning tools (step-by-step thinking, analysis)
-- Utility tools (time, calculations, formatting)
-- Data tools (processing, transformation, visualization)`,
-    messages,
-    tools: {
-      web_search: tool({
-        description: "Search the web for current information using Tavily MCP server",
-        parameters: z.object({
-          query: z.string().describe("The search query"),
-          max_results: z.number().optional().describe("Maximum number of results to return"),
-        }),
-        execute: async ({ query, max_results = 5 }) => {
-          // Simulate web search results
-          return {
-            results: [
-              {
-                title: `Search result for: ${query}`,
-                url: "https://example.com/result1",
-                snippet: `This is a simulated search result for "${query}". In a real implementation, this would connect to your Tavily MCP server.`,
-                relevance_score: 0.95,
-              },
-              {
-                title: `Related information about ${query}`,
-                url: "https://example.com/result2",
-                snippet: `Additional context and information related to your query about ${query}.`,
-                relevance_score: 0.87,
-              },
-            ],
-            search_metadata: {
-              query,
-              total_results: max_results,
-              search_time: "0.23s",
-              mcp_server: "tavily-mcp",
-            },
-          }
-        },
-      }),
-      think_step_by_step: tool({
-        description: "Break down complex problems into logical steps using Sequential Thinking MCP server",
-        parameters: z.object({
-          problem: z.string().describe("The problem to analyze step by step"),
-          max_steps: z.number().optional().describe("Maximum number of steps to generate"),
-        }),
-        execute: async ({ problem, max_steps = 5 }) => {
-          // Simulate step-by-step thinking
-          const steps = [
-            `Step 1: Understand the problem - "${problem}"`,
-            `Step 2: Identify key components and requirements`,
-            `Step 3: Consider possible approaches and solutions`,
-            `Step 4: Evaluate pros and cons of each approach`,
-            `Step 5: Recommend the best solution path`,
-          ].slice(0, max_steps)
-
-          return {
-            problem,
-            thinking_steps: steps,
-            conclusion: `Based on the step-by-step analysis, here's my recommended approach for: ${problem}`,
-            mcp_server: "sequential-thinking",
-          }
-        },
-      }),
-      get_current_time: tool({
-        description: "Get current date and time information using Time MCP server",
-        parameters: z.object({
-          timezone: z.string().optional().describe("Timezone to get time for (default: UTC)"),
-          format: z.string().optional().describe("Time format preference"),
-        }),
-        execute: async ({ timezone = "UTC", format = "ISO" }) => {
-          const now = new Date()
-          return {
-            current_time: now.toISOString(),
-            timezone,
-            format,
-            unix_timestamp: Math.floor(now.getTime() / 1000),
-            human_readable: now.toLocaleString(),
-            mcp_server: "time-mcp",
-          }
-        },
-      }),
-    },
-    maxSteps: 5,
+// Helper: Call Dynamic Tool Retriever MCP
+async function getRelevantTools(userQuery: string) {
+  const response = await fetch("http://localhost:8001/tool", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_description: userQuery, top_k: 5 }),
   })
+  if (!response.ok) throw new Error("Failed to call Dynamic Tool Retriever MCP")
+  return await response.json() // Array of tool info (see retriever README)
+}
 
-  return result.toDataStreamResponse()
+// Helper: Ensure a server is running via MCP Server Manager
+async function ensureServerRunning(name: string, config: any) {
+  const response = await fetch("http://localhost:9001/add_server", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, config }),
+  })
+  if (!response.ok) throw new Error(`Failed to add server ${name}`)
+  return await response.json()
+}
+
+// Helper: Load latest MCP client config (with SSE endpoints)
+async function loadClientConfig() {
+  const configPath = path.resolve("/workspace/MCP_Server_Manager/mcp_client_config.json")
+  const raw = await fs.readFile(configPath, "utf-8")
+  return JSON.parse(raw)
+}
+
+// Helper: Connect to MCP server and call tool
+async function callMcpTool(serverUrl: string, toolName: string, args: any) {
+  const client = new Client({ name: "mcp-chat-agent", version: "1.0.0" })
+  const transport = new StreamableHTTPClientTransport(new URL(serverUrl))
+  await client.connect(transport)
+  // List tools (optional, for validation)
+  // const tools = await client.listTools()
+  // Call the tool
+  const result = await client.callTool({ name: toolName, arguments: args })
+  await client.close()
+  return result
+}
+
+export async function POST(req: NextRequest) {
+  const { messages } = await req.json()
+  const userMessage = messages[messages.length - 1]?.content || ""
+
+  // 1. Discover relevant tools and their server configs
+  const tools = await getRelevantTools(userMessage)
+
+  // 2. Ensure all required servers are running
+  for (const tool of tools) {
+    if (tool.mcp_server_config && tool.mcp_server_config.mcpServers) {
+      for (const [name, config] of Object.entries(tool.mcp_server_config.mcpServers)) {
+        await ensureServerRunning(name, config)
+      }
+    }
+  }
+
+  // 3. Load latest client config for SSE endpoints
+  const clientConfig = await loadClientConfig()
+
+  // 4. For each tool, connect and call via MCP SDK
+  //    (For demo, just call the top tool. Extend as needed for multi-tool workflows)
+  const topTool = tools[0]
+  let toolResult = null
+  if (topTool && topTool.mcp_server_config && topTool.mcp_server_config.mcpServers) {
+    const [serverName] = Object.keys(topTool.mcp_server_config.mcpServers)
+    const serverInfo = clientConfig.mcpServers[serverName]
+    if (!serverInfo) throw new Error(`No client config for server ${serverName}`)
+    toolResult = await callMcpTool(serverInfo.url, topTool.tool_name, {}) // TODO: Map user args
+  }
+
+  // 5. Stream the result back (for now, just return as JSON)
+  return new Response(JSON.stringify({ result: toolResult }), {
+    headers: { "Content-Type": "application/json" },
+  })
 }
