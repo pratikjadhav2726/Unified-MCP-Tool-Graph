@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "tavily-mcp": {
+      "type": "sse",
+      "url": "http://localhost:9000/servers/tavily-mcp/sse",
+      "timeout": 5,
+      "sse_read_timeout": 300
+    },
+    "sequential-thinking": {
+      "type": "sse",
+      "url": "http://localhost:9000/servers/sequential-thinking/sse",
+      "timeout": 5,
+      "sse_read_timeout": 300
+    },
+    "time": {
+      "type": "sse",
+      "url": "http://localhost:9000/servers/time/sse",
+      "timeout": 5,
+      "sse_read_timeout": 300
+    }
+  }
+}
