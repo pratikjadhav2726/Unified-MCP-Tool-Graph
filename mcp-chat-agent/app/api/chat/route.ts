@@ -28,7 +28,7 @@ async function getRelevantTools(userQuery: string) {
 
 // Helper: Ensure a server is running via MCP Server Manager
 async function ensureServerRunning(name: string, config: any) {
-  const response = await fetch("http://localhost:9001/add_server", {
+  const response = await fetch("http://localhost:9000/add_server", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, config }),
