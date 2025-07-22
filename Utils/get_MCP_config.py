@@ -28,13 +28,19 @@ async def fetch_github_page_async(url):
     except IndexError:
         raise ValueError(f"Invalid GitHub URL: {url}")
 
+    subdir = ""
     if "tree" in parts:
         try:
             branch = parts[6]
+            subdir = "/".join(parts[7:-1]) if parts[-1] == '' else "/".join(parts[7:])
         except IndexError:
             branch = "main"
+            subdir = ""
 
-    raw_url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/README.md"
+    if subdir:
+        raw_url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/{subdir}/README.md"
+    else:
+        raw_url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/README.md"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(raw_url) as response:
@@ -45,7 +51,6 @@ async def fetch_github_page_async(url):
         # Log and re-raise for upstream error handling
         print(f"[ERROR] Error fetching GitHub README: {e}")
         raise Exception(f"Error fetching GitHub README: {e}")
-
 
 
 async def extract_config_from_github_async(url):
@@ -64,21 +69,32 @@ async def extract_config_from_github_async(url):
         print(f"[ERROR] Failed to fetch README for config extraction: {e}")
         raise Exception(f"Failed to fetch README for config extraction: {e}")
 
-    config_match = re.search(r'```json\s*({\s*"mcpServers".*?})\s*```', content, re.DOTALL)
-    if config_match:
+    matches = re.finditer(r'```json\s*({\s*"mcpServers".*?})\s*```', content, re.DOTALL)
+    for match in matches:
         try:
-            raw_config = config_match.group(1)
+            raw_config = match.group(1)
             config_str = re.sub(r'\s+', ' ', raw_config).strip()
             cleaned_json_string = re.sub(r',\s*([}\]])', r'\1', config_str)
+            
+
             config = json.loads(cleaned_json_string)
-            config = inject_env_keys(config)  # Inject environment variables
-            return config
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] Failed to decode JSON from GitHub content: {e}")
-            raise ValueError("Failed to decode JSON from GitHub content.")
+            print("DEBUG: Raw config parsed from README:", json.dumps(config, indent=2))
+
+            if "mcpServers" in config and isinstance(config["mcpServers"], dict):
+                filtered_servers = {
+                    name: server
+                    for name, server in config["mcpServers"].items()
+                    if server.get("command") in ("npx", "python")
+                }
+                if filtered_servers:
+                    result = {"mcpServers": filtered_servers}
+                    result = inject_env_keys(result)
+                    return result
+        except Exception as e:
+            print(f"[ERROR] Failed to process a config block: {e}")
+
     print(f"[WARN] No valid configuration found in GitHub content for {url}")
     raise ValueError("No valid configuration found in GitHub content.")
-
 
 
 def inject_env_keys(mcp_config):
@@ -112,13 +128,11 @@ def inject_env_keys(mcp_config):
                 print(f"[WARN] Environment variable '{key}' not found for server '{server}'. Using default or placeholder.")
     return mcp_config
 
-
-
 # Example usage for testing
 if __name__ == "__main__":
     async def main():
         """Test the config extraction utility with error handling."""
-        url = "https://github.com/tavily-ai/tavily-mcp"
+        url = "https://github.com/supabase-community/supabase-mcp"
         try:
             config = await extract_config_from_github_async(url)
             config = inject_env_keys(config)
