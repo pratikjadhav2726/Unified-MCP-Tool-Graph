@@ -233,4 +233,4 @@ async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> List[Dict[str,
 
 if __name__ == "__main__":
     logger.info(f"Starting {SERVER_NAME} server...")
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="stdio")
