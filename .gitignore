@@ -200,3 +200,5 @@ mcp-chat-agent/.vercel
 # typescript
 mcp-chat-agent/*.tsbuildinfo
 mcp-chat-agent/next-env.d.ts
+# dependencies
+/node_modules

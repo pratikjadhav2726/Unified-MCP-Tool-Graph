@@ -16,3 +16,5 @@ uvicorn
 httpx
 pytest
 pytest-asyncio
+mcp-proxy
+uv
