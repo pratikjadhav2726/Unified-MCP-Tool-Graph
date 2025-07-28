@@ -31,11 +31,11 @@
       "env": {},
       "transportType": "stdio"
     },
-    "fetch": {
+    "dummy-tool-retriever": {
       "enabled": true,
-      "command": "uvx",
+      "command": "python3",
       "args": [
-        "mcp-server-fetch"
+        "/workspace/gateway/dummy_tool_retriever.py"
       ],
       "env": {},
       "transportType": "stdio"
