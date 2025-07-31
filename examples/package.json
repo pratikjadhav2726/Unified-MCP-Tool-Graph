@@ -1,0 +1,29 @@
+{
+  "name": "unified-mcp-gateway-examples",
+  "version": "1.0.0",
+  "description": "Example clients for the Unified MCP Gateway",
+  "main": "nodejs_client.js",
+  "scripts": {
+    "start": "node nodejs_client.js",
+    "demo": "node nodejs_client.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gateway",
+    "client",
+    "api"
+  ],
+  "author": "Unified MCP Gateway Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
