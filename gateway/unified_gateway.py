@@ -3,13 +3,15 @@
 Working Unified MCP Gateway
 
 A robust implementation that properly manages MCP server connections
-using the official MCP Python SDK patterns.
+using the official MCP Python SDK patterns, with dynamic tool retrieval
+and automatic fallback to popular servers when Neo4j is unavailable.
 """
 
 import sys
 import os
 import asyncio
 import logging
+import json
 from typing import Dict, Any, List, Optional
 
 # Add parent directory to Python path
@@ -25,24 +27,82 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("WorkingUnifiedMCPGateway")
 
 class WorkingUnifiedMCPGateway:
-    """A working unified MCP gateway that properly manages connections."""
+    """A working unified MCP gateway that properly manages connections with dynamic tool retrieval."""
     
     def __init__(self):
         self.server = FastMCP("WorkingUnifiedMCPGateway")
         self.tool_catalog: Dict[str, Dict[str, Any]] = {}  # tool_name -> {server_name, tool_info, url}
         self.server_urls: Dict[str, str] = {}  # server_name -> url
+        self.neo4j_available = self._check_neo4j_availability()
         self.register_meta_tools()
     
+    def _check_neo4j_availability(self) -> bool:
+        """Check if Neo4j is available for the dynamic tool retriever."""
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            neo4j_uri = os.getenv("NEO4J_URI")
+            neo4j_user = os.getenv("NEO4J_USER")
+            neo4j_password = os.getenv("NEO4J_PASSWORD")
+            
+            if not (neo4j_uri and neo4j_user and neo4j_password):
+                logger.warning("Neo4j environment variables not set")
+                return False
+                
+            # Try to import and test Neo4j connection
+            from neo4j import GraphDatabase
+            driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            with driver.session() as session:
+                session.run("RETURN 1")
+            driver.close()
+            logger.info("Neo4j connection verified")
+            return True
+        except Exception as e:
+            logger.warning(f"Neo4j not available: {e}")
+            return False
+    
+    def _get_fallback_config(self) -> Dict[str, Any]:
+        """Get fallback server configuration when Neo4j is not available."""
+        return {
+            "mcpServers": {
+                "everything": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-everything"]
+                },
+                "sequential-thinking": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+                },
+                "time": {
+                    "command": "uvx",
+                    "args": ["mcp-server-time"]
+                }
+            }
+        }
+    
     async def initialize_from_config(self, config_file: str = "mcp_client_config.json"):
-        """Initialize the gateway from MCP client configuration."""
-        import json
-        
+        """Initialize the gateway from MCP client configuration with fallback support."""
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
         except FileNotFoundError:
-            logger.error(f"Configuration file {config_file} not found")
-            return
+            logger.warning(f"Configuration file {config_file} not found, using fallback")
+            if not self.neo4j_available:
+                # Use fallback configuration
+                fallback_config = self._get_fallback_config()
+                # Convert to client format
+                config = {"mcpServers": {}}
+                for server_name in fallback_config["mcpServers"]:
+                    config["mcpServers"][server_name] = {
+                        "type": "sse",
+                        "url": f"http://localhost:9000/servers/{server_name}/sse",
+                        "timeout": 5,
+                        "sse_read_timeout": 300
+                    }
+            else:
+                logger.error(f"Configuration file {config_file} not found and no fallback available")
+                return
         
         servers_config = config.get("mcpServers", {})
         logger.info(f"Loading {len(servers_config)} servers from configuration")
@@ -66,35 +126,77 @@ class WorkingUnifiedMCPGateway:
                 logger.warning(f"Failed to discover tools from {server_name}: {e}")
     
     async def _discover_tools_from_server(self, server_name: str, url: str):
-        """Discover tools from a single server."""
+        """Discover tools from a single server with retry logic."""
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         logger.info(f"Discovering tools from {server_name} at {url}")
         
-        try:
-            # Create a temporary connection to discover tools
-            async with sse_client(url=url, timeout=10.0, sse_read_timeout=30.0) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    
-                    # Get tools
-                    tools_response = await session.list_tools()
-                    tools = getattr(tools_response, "tools", [])
-                    
-                    for tool in tools:
-                        tool_key = f"{server_name}.{tool.name}"
-                        self.tool_catalog[tool_key] = {
-                            "server_name": server_name,
-                            "tool_name": tool.name,
-                            "tool_info": tool,
-                            "url": url,
-                            "description": getattr(tool, "description", "")
-                        }
-                        logger.debug(f"Registered tool: {tool_key}")
-                    
-                    logger.info(f"✓ Discovered {len(tools)} tools from {server_name}")
-                    
-        except Exception as e:
-            logger.error(f"✗ Failed to discover tools from {server_name}: {e}")
-            raise
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Create a temporary connection to discover tools
+                logger.debug(f"Creating SSE client connection to {url} (attempt {attempt + 1}/{max_retries})")
+                async with sse_client(url=url, timeout=15.0, sse_read_timeout=60.0) as (read, write):
+                    logger.debug(f"SSE client connected to {server_name}")
+                    async with ClientSession(read, write) as session:
+                        logger.debug(f"ClientSession created for {server_name}")
+                        await session.initialize()
+                        logger.debug(f"ClientSession initialized for {server_name}")
+                        
+                        # Get tools
+                        logger.debug(f"Requesting tools list from {server_name}")
+                        tools_response = await session.list_tools()
+                        tools = getattr(tools_response, "tools", [])
+                        logger.debug(f"Received {len(tools)} tools from {server_name}")
+                        
+                        for tool in tools:
+                            tool_key = f"{server_name}.{tool.name}"
+                            output_schema = getattr(tool, "outputSchema", None)
+                            logger.debug(f"Processing tool: {tool.name}")
+                            logger.debug(f"  - inputSchema: {bool(tool.inputSchema)}")
+                            logger.debug(f"  - outputSchema: {bool(output_schema)} ({'null - this is normal' if output_schema is None else 'defined'})")
+                            
+                            self.tool_catalog[tool_key] = {
+                                "server_name": server_name,
+                                "tool_name": tool.name,
+                                "tool_info": tool,
+                                "inputSchema": tool.inputSchema,
+                                "outputSchema": output_schema,
+                                "url": url,
+                                "description": getattr(tool, "description", "")
+                            }
+                            logger.debug(f"Registered tool: {tool_key}")
+                        
+                        logger.info(f"✓ Discovered {len(tools)} tools from {server_name}")
+                        return  # Success, exit retry loop
+                        
+            except asyncio.TimeoutError as e:
+                logger.warning(f"Timeout connecting to {server_name} at {url} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Final timeout connecting to {server_name} after {max_retries} attempts")
+                    raise
+            except ConnectionError as e:
+                logger.warning(f"Connection error to {server_name} at {url} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Final connection error to {server_name} after {max_retries} attempts")
+                    raise
+            except Exception as e:
+                logger.warning(f"Error discovering tools from {server_name} (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Failed to discover tools from {server_name} after {max_retries} attempts: {type(e).__name__}: {e}")
+                    # Import traceback to get full stack trace
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    raise
     
     async def call_tool_on_server(self, server_name: str, tool_name: str, arguments: dict) -> Any:
         """Call a tool on a specific server using a fresh connection."""
@@ -102,11 +204,13 @@ class WorkingUnifiedMCPGateway:
         if not url:
             raise ValueError(f"Server {server_name} not configured")
         
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         logger.info(f"Calling tool {tool_name} on {server_name} with args: {arguments}")
         
         try:
             # Create a fresh connection for this tool call
-            async with sse_client(url=url, timeout=10.0, sse_read_timeout=300.0) as (read, write):
+            async with sse_client(url=url, timeout=15.0, sse_read_timeout=300.0) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     
@@ -171,8 +275,10 @@ class WorkingUnifiedMCPGateway:
             return {"error": f"Server {server_name} not configured"}
         
         url = self.server_urls[server_name]
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         try:
-            async with sse_client(url=url, timeout=5.0) as (read, write):
+            async with sse_client(url=url, timeout=10.0) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     return {"status": "connected", "server": server_name, "url": url}
@@ -192,7 +298,9 @@ class WorkingUnifiedMCPGateway:
                     "name": tool_key,
                     "description": tool_info["description"],
                     "server": tool_info["server_name"],
-                    "actual_name": tool_info["tool_name"]
+                    "actual_name": tool_info["tool_name"],
+                    "inputSchema": tool_info["inputSchema"],
+                    "outputSchema": tool_info.get("outputSchema")
                 })
             return tools
         
@@ -211,7 +319,8 @@ class WorkingUnifiedMCPGateway:
                 status[server_name] = {
                     "url": url,
                     "tools_count": tools_count,
-                    "configured": True
+                    "configured": True,
+                    "neo4j_available": self.neo4j_available
                 }
             return status
         
@@ -222,44 +331,88 @@ class WorkingUnifiedMCPGateway:
                 return {"error": f"Server {server_name} not configured"}
             
             url = self.server_urls[server_name]
+            # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+            url = url.replace("localhost", "127.0.0.1")
             try:
-                async with sse_client(url=url, timeout=5.0) as (read, write):
+                async with sse_client(url=url, timeout=10.0) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         return {"status": "connected", "server": server_name, "url": url}
             except Exception as e:
                 return {"status": "failed", "server": server_name, "error": str(e)}
+        
+        @self.server.tool()
+        async def get_system_info() -> Dict[str, Any]:
+            """Get information about the gateway system configuration."""
+            return {
+                "neo4j_available": self.neo4j_available,
+                "total_servers": len(self.server_urls),
+                "total_tools": len(self.tool_catalog),
+                "servers": list(self.server_urls.keys()),
+                "fallback_mode": not self.neo4j_available
+            }
 
 def start_mcp_servers():
-    """Start the MCP server manager with popular servers."""
+    """Start the MCP server manager with popular servers and dynamic tool retriever."""
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    POPULAR_SERVERS = {
-        "tavily-mcp": {
-            "command": "npx",
-            "args": ["-y", "tavily-mcp@latest"],
-            "env": {"TAVILY_API_KEY": "your-api-key-here"}
-        },
-        "sequential-thinking": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
-        },
-        "time": {
-            "command": "uvx",
-            "args": ["mcp-server-time"]
-        },
-        "dummy-tool-retriever": {
-            "command": "python",
-            "args": [os.path.join(PROJECT_ROOT, "gateway", "dummy_tool_retriever.py")]
-        }
-    }
+    # Check Neo4j availability for dynamic configuration
+    neo4j_available = False
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        neo4j_uri = os.getenv("NEO4J_URI")
+        neo4j_user = os.getenv("NEO4J_USER")
+        neo4j_password = os.getenv("NEO4J_PASSWORD")
+        neo4j_available = bool(neo4j_uri and neo4j_user and neo4j_password)
+    except:
+        pass
     
+    POPULAR_SERVERS = {}
+    
+    if neo4j_available:
+        # Include dynamic tool retriever when Neo4j is available
+        POPULAR_SERVERS.update({
+            "dynamic-tool-retriever": {
+                "command": "python",
+                "args": [os.path.join(PROJECT_ROOT, "Dynamic_tool_retriever_MCP", "server.py")]
+            },
+            "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+            },
+            "time": {
+                "command": "uvx",
+                "args": ["mcp-server-time"]
+            }
+        })
+    else:
+        # Fallback configuration without Neo4j dependency
+        POPULAR_SERVERS.update({
+            "everything": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-everything"]
+            },
+            "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+            },
+            "time": {
+                "command": "uvx",
+                "args": ["mcp-server-time"]
+            }
+        })
+        
     # Initialize and start server manager
     manager = MCPServerManager(popular_servers=POPULAR_SERVERS, proxy_port=9000)
     
     try:
         manager.start()
         logger.info("MCP Server Manager started successfully")
+        if neo4j_available:
+            logger.info("Running with Neo4j-enabled dynamic tool retriever")
+        else:
+            logger.info("Running in fallback mode with everything server")
         return manager
     except Exception as e:
         logger.error(f"Failed to start MCP Server Manager: {e}")
@@ -275,19 +428,41 @@ async def main():
         logger.error("Failed to start MCP servers")
         return
     
-    # Wait for servers to start
-    logger.info("Waiting for servers to start...")
-    await asyncio.sleep(5)
+    # Wait longer for servers to start and add health check
+    logger.info("Waiting for servers to fully initialize...")
+    await asyncio.sleep(10)  # Increased from 5 to 10 seconds
     
     # Initialize gateway
     gateway = WorkingUnifiedMCPGateway()
     
     try:
-        # Initialize from configuration
-        await gateway.initialize_from_config("mcp_client_config.json")
+        # Wait a bit more and then test connectivity before tool discovery
+        logger.info("Testing server connectivity before tool discovery...")
+        await asyncio.sleep(2)
+        
+        # Initialize from configuration with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await gateway.initialize_from_config("mcp_client_config.json")
+                if len(gateway.tool_catalog) > 0:
+                    break
+                else:
+                    logger.warning(f"No tools discovered on attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        logger.info("Retrying tool discovery in 3 seconds...")
+                        await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"Tool discovery attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("Retrying in 3 seconds...")
+                    await asyncio.sleep(3)
+                else:
+                    raise
         
         logger.info("=== Working Unified MCP Gateway Ready ===")
         logger.info(f"Available tools: {list(gateway.tool_catalog.keys())}")
+        logger.info(f"Neo4j available: {gateway.neo4j_available}")
         logger.info("Starting FastMCP server on port 8000...")
         
         # Start the FastMCP server using async method to avoid event loop conflict
