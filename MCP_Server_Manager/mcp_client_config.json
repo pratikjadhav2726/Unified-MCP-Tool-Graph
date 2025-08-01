@@ -1,8 +1,14 @@
 {
   "mcpServers": {
-    "tavily-mcp": {
+    "dynamic-tool-retriever": {
       "type": "sse",
-      "url": "http://localhost:9000/servers/tavily-mcp/sse",
+      "url": "http://localhost:9000/servers/dynamic-tool-retriever/sse",
+      "timeout": 5,
+      "sse_read_timeout": 300
+    },
+    "everything": {
+      "type": "sse",
+      "url": "http://localhost:9000/servers/everything/sse",
       "timeout": 5,
       "sse_read_timeout": 300
     },

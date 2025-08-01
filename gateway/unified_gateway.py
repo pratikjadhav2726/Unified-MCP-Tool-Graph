@@ -3,13 +3,15 @@
 Working Unified MCP Gateway
 
 A robust implementation that properly manages MCP server connections
-using the official MCP Python SDK patterns.
+using the official MCP Python SDK patterns, with dynamic tool retrieval
+and automatic fallback to popular servers when Neo4j is unavailable.
 """
 
 import sys
 import os
 import asyncio
 import logging
+import json
 from typing import Dict, Any, List, Optional
 
 # Add parent directory to Python path
@@ -25,24 +27,82 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("WorkingUnifiedMCPGateway")
 
 class WorkingUnifiedMCPGateway:
-    """A working unified MCP gateway that properly manages connections."""
+    """A working unified MCP gateway that properly manages connections with dynamic tool retrieval."""
     
     def __init__(self):
         self.server = FastMCP("WorkingUnifiedMCPGateway")
         self.tool_catalog: Dict[str, Dict[str, Any]] = {}  # tool_name -> {server_name, tool_info, url}
         self.server_urls: Dict[str, str] = {}  # server_name -> url
+        self.neo4j_available = self._check_neo4j_availability()
         self.register_meta_tools()
     
+    def _check_neo4j_availability(self) -> bool:
+        """Check if Neo4j is available for the dynamic tool retriever."""
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            neo4j_uri = os.getenv("NEO4J_URI")
+            neo4j_user = os.getenv("NEO4J_USER")
+            neo4j_password = os.getenv("NEO4J_PASSWORD")
+            
+            if not (neo4j_uri and neo4j_user and neo4j_password):
+                logger.warning("Neo4j environment variables not set")
+                return False
+                
+            # Try to import and test Neo4j connection
+            from neo4j import GraphDatabase
+            driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+            with driver.session() as session:
+                session.run("RETURN 1")
+            driver.close()
+            logger.info("Neo4j connection verified")
+            return True
+        except Exception as e:
+            logger.warning(f"Neo4j not available: {e}")
+            return False
+    
+    def _get_fallback_config(self) -> Dict[str, Any]:
+        """Get fallback server configuration when Neo4j is not available."""
+        return {
+            "mcpServers": {
+                "everything": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-everything"]
+                },
+                "sequential-thinking": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+                },
+                "time": {
+                    "command": "uvx",
+                    "args": ["mcp-server-time"]
+                }
+            }
+        }
+    
     async def initialize_from_config(self, config_file: str = "mcp_client_config.json"):
-        """Initialize the gateway from MCP client configuration."""
-        import json
-        
+        """Initialize the gateway from MCP client configuration with fallback support."""
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
         except FileNotFoundError:
-            logger.error(f"Configuration file {config_file} not found")
-            return
+            logger.warning(f"Configuration file {config_file} not found, using fallback")
+            if not self.neo4j_available:
+                # Use fallback configuration
+                fallback_config = self._get_fallback_config()
+                # Convert to client format
+                config = {"mcpServers": {}}
+                for server_name in fallback_config["mcpServers"]:
+                    config["mcpServers"][server_name] = {
+                        "type": "sse",
+                        "url": f"http://localhost:9000/servers/{server_name}/sse",
+                        "timeout": 5,
+                        "sse_read_timeout": 300
+                    }
+            else:
+                logger.error(f"Configuration file {config_file} not found and no fallback available")
+                return
         
         servers_config = config.get("mcpServers", {})
         logger.info(f"Loading {len(servers_config)} servers from configuration")
@@ -211,7 +271,8 @@ class WorkingUnifiedMCPGateway:
                 status[server_name] = {
                     "url": url,
                     "tools_count": tools_count,
-                    "configured": True
+                    "configured": True,
+                    "neo4j_available": self.neo4j_available
                 }
             return status
         
@@ -229,30 +290,68 @@ class WorkingUnifiedMCPGateway:
                         return {"status": "connected", "server": server_name, "url": url}
             except Exception as e:
                 return {"status": "failed", "server": server_name, "error": str(e)}
+        
+        @self.server.tool()
+        async def get_system_info() -> Dict[str, Any]:
+            """Get information about the gateway system configuration."""
+            return {
+                "neo4j_available": self.neo4j_available,
+                "total_servers": len(self.server_urls),
+                "total_tools": len(self.tool_catalog),
+                "servers": list(self.server_urls.keys()),
+                "fallback_mode": not self.neo4j_available
+            }
 
 def start_mcp_servers():
-    """Start the MCP server manager with popular servers."""
+    """Start the MCP server manager with popular servers and dynamic tool retriever."""
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    POPULAR_SERVERS = {
-        "tavily-mcp": {
-            "command": "npx",
-            "args": ["-y", "tavily-mcp@latest"],
-            "env": {"TAVILY_API_KEY": "your-api-key-here"}
-        },
-        "sequential-thinking": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
-        },
-        "time": {
-            "command": "uvx",
-            "args": ["mcp-server-time"]
-        },
-        "dummy-tool-retriever": {
-            "command": "python",
-            "args": [os.path.join(PROJECT_ROOT, "gateway", "dummy_tool_retriever.py")]
-        }
-    }
+    # Check Neo4j availability for dynamic configuration
+    neo4j_available = False
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        neo4j_uri = os.getenv("NEO4J_URI")
+        neo4j_user = os.getenv("NEO4J_USER")
+        neo4j_password = os.getenv("NEO4J_PASSWORD")
+        neo4j_available = bool(neo4j_uri and neo4j_user and neo4j_password)
+    except:
+        pass
+    
+    POPULAR_SERVERS = {}
+    
+    if neo4j_available:
+        # Include dynamic tool retriever when Neo4j is available
+        POPULAR_SERVERS.update({
+            "dynamic-tool-retriever": {
+                "command": "python",
+                "args": [os.path.join(PROJECT_ROOT, "Dynamic_tool_retriever_MCP", "server.py")]
+            },
+            "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+            },
+            "time": {
+                "command": "uvx",
+                "args": ["mcp-server-time"]
+            }
+        })
+    else:
+        # Fallback configuration without Neo4j dependency
+        POPULAR_SERVERS.update({
+            "everything": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-everything"]
+            },
+            "sequential-thinking": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+            },
+            "time": {
+                "command": "uvx",
+                "args": ["mcp-server-time"]
+            }
+        })
     
     # Initialize and start server manager
     manager = MCPServerManager(popular_servers=POPULAR_SERVERS, proxy_port=9000)
@@ -260,6 +359,10 @@ def start_mcp_servers():
     try:
         manager.start()
         logger.info("MCP Server Manager started successfully")
+        if neo4j_available:
+            logger.info("Running with Neo4j-enabled dynamic tool retriever")
+        else:
+            logger.info("Running in fallback mode with everything server")
         return manager
     except Exception as e:
         logger.error(f"Failed to start MCP Server Manager: {e}")
@@ -288,6 +391,7 @@ async def main():
         
         logger.info("=== Working Unified MCP Gateway Ready ===")
         logger.info(f"Available tools: {list(gateway.tool_catalog.keys())}")
+        logger.info(f"Neo4j available: {gateway.neo4j_available}")
         logger.info("Starting FastMCP server on port 8000...")
         
         # Start the FastMCP server using async method to avoid event loop conflict

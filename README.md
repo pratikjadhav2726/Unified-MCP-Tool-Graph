@@ -1,291 +1,207 @@
-# Unified MCP Tool Graph: A Intelligence Layer for Dynamic Tool Retrieval
+# 🚀 MCP Unified Gateway System
 
- ![image](https://github.com/user-attachments/assets/31dedcf0-b66b-49df-95d6-69e36a9115f9)
+A comprehensive, production-ready **Model Context Protocol (MCP) Gateway** that provides unified access to multiple MCP servers with intelligent tool routing, dynamic server management, and automatic fallback capabilities.
 
+## ✨ Key Features
 
+- 🔄 **Unified Gateway**: Single endpoint for accessing multiple MCP servers
+- 🧠 **Dynamic Tool Retrieval**: Intelligent tool discovery using semantic similarity (with Neo4j)
+- 🛡️ **Automatic Fallback**: Falls back to "everything" server when Neo4j is unavailable
+- ⚡ **Zero Configuration**: Works out of the box without any database setup
+- 🔧 **Server Management**: Dynamic addition/removal of MCP servers
+- 🎯 **Smart Routing**: Intelligent routing of tool calls to appropriate servers
+- 📊 **Connection Management**: Robust connection handling with retry logic
 
+## 🚀 Quick Start
 
+### 1. Install Dependencies
+```bash
+# Install Python dependencies
+pip install --break-system-packages -r requirements.txt
 
-**Unified MCP Tool Graph** is a research-driven project that aggregates and structures tool APIs from diverse **Model Context Protocol (MCP) servers** into a centralized **Neo4j graph database**. This graph functions as an intelligent infrastructure layer that enables **large language models (LLMs)** and **agentic AI systems** to **dynamically retrieve** the most relevant tools for any task — without being overwhelmed by redundant or confusing options.
+# Install essential MCP servers
+npm install -g @modelcontextprotocol/server-everything
+npm install -g @modelcontextprotocol/server-sequential-thinking
+```
 
----
+### 2. Start the System
+```bash
+# Make startup script executable
+chmod +x start_gateway.sh
 
-## 🚀 Recent Updates: Dynamic MCP Server Spin-Up & Minimal Tool Context
+# Start the unified gateway
+./start_gateway.sh
+```
 
-### 🟢 Dynamic MCP Server Orchestration
-- The system now **spins up only the MCP servers required for a given user query**. Five popular MCP servers (including the Dynamic Tool Retriever MCP) are kept warm by default; others are started on demand and kept alive for 10 minutes after last use.
-- **Dynamic Tool Retriever MCP** returns not just tool metadata, but also the config needed to run/connect to the MCP server for each tool (fetched from the vendor's GitHub README automatically).
-- **Automatic MCP Config Extraction:** Uses the vendor's GitHub repo to extract the MCP server config (from README) for each tool, so agents can spin up/connect to the right server on the fly.
-- **Error Handling:** If config extraction fails, the system logs a warning and continues, ensuring robust tool retrieval.
+**That's it!** 🎉 The gateway starts on `http://localhost:8000`
 
-### 🟢 Minimal Tool Context for LLMs/Agents
-- **Only the exact tools required for the user query are loaded into the agent's context** (not all tools from all MCP servers). This prevents LLM confusion and infinite tool loops.
-- **End-to-End Flow:**
-    1. User query is received.
-    2. Dynamic Tool Retriever MCP queries the Neo4j graph and returns the top relevant tools **plus their MCP server configs**.
-    3. The agent spins up/connects to only the required MCP servers (using the configs), and loads only the retrieved tools.
-    4. The agent executes the workflow and returns the answer.
+### 3. Test Your Setup
+```bash
+# Check system status
+curl -X POST http://localhost:8000/tools/get_system_info
 
-### 🟢 A2A and LangGraph Agent Support
-- **A2A Agent Example:** See `Example_Agents/A2A_DynamicToolAgent/` for a fully dynamic A2A agent that orchestrates MCP servers and tools per request.
-- **LangGraph Example:** See `Example_Agents/Langgraph/` for a LangGraph agent using the same dynamic, minimal-tool approach.
+# List available tools
+curl -X POST http://localhost:8000/tools/list
 
----
+# Call a tool
+curl -X POST http://localhost:8000/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name": "time.get_current_time", "args": {}}'
+```
 
-> 🔬 This repository focuses on the creation and evolution of the **Unified Tool Graph Database**. Chatbot-based integration (e.g., LangChain) is treated as a modular extension of this foundational layer.
+## 🏗️ System Architecture
 
-> 📢 Support for Cline, IDE's coming soon..
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    MCP Unified Gateway                      │
+│                    (Port 8000)                             │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+┌─────────────────────┴───────────────────────────────────────┐
+│                 MCP Proxy Server                            │
+│                 (Port 9000)                                │
+└─┬─────────────┬─────────────┬─────────────┬─────────────────┘
+  │             │             │             │
+┌─▼──────────┐ ┌▼─────────────▼┐ ┌─▼─────────▼┐ ┌─▼─────────────┐
+│ Dynamic    │ │ Everything   │ │Sequential  │ │ Time Server   │
+│ Tool       │ │ Server       │ │ Thinking   │ │               │
+│ Retriever  │ │              │ │ Server     │ │               │
+└────────────┘ └──────────────┘ └────────────┘ └───────────────┘
+      │
+┌─────▼─────┐
+│   Neo4j   │ (Optional)
+│ Database  │
+└───────────┘
+```
 
----
+## 🔧 Configuration Modes
 
-## Research Problem
+### 🌟 Full Mode (Neo4j Available)
+- ✅ Neo4j database connected
+- ✅ Dynamic tool retriever enabled  
+- ✅ Semantic search capabilities
+- ✅ Intelligent tool ranking
 
-As LLMs and autonomous agents evolve to interact with external tools and APIs, a critical bottleneck has emerged:
+### 🔄 Fallback Mode (Neo4j Unavailable)
+- ⚠️ Neo4j not available
+- ✅ Everything server enabled
+- ✅ Comprehensive tool coverage
+- ✅ No database dependency
 
-> **How can models efficiently select the right tool from an ever-expanding universe of APIs — without going into infinite loops or picking the wrong ones?**
+## 📁 Project Structure
 
-### Why This Happens:
-- **Tool Confusion:**  
-  LLMs struggle when many tools offer similar functions (e.g., `create_post`, `schedule_post`, `post_to_social`), leading to indecision and incorrect tool calls.
-  
-- ↺ **Infinite Chains:**  
-  Without a structured understanding of tool differences, LLMs often get stuck in unproductive chains, calling tools repetitively or selecting suboptimal ones.
+```
+├── gateway/                     # Unified gateway implementation
+│   ├── unified_gateway.py      # Main gateway server
+│   └── dummy_tool_retriever.py # Fallback tool retriever
+├── MCP_Server_Manager/         # Server management system
+│   ├── mcp_server_manager.py   # Dynamic server manager
+│   └── mcp_client_config.json  # Client configuration
+├── Dynamic_tool_retriever_MCP/ # Neo4j-based tool retrieval
+│   ├── server.py               # Dynamic tool retriever server
+│   ├── neo4j_retriever.py      # Neo4j integration with fallback
+│   └── embedder.py             # Text embedding utilities
+├── mcp-chat-agent/            # Next.js chat interface (optional)
+├── start_unified_gateway.py   # Main startup script
+├── start_gateway.sh           # Shell startup wrapper
+├── .env.example               # Environment configuration template
+├── UNIFIED_GATEWAY_README.md  # Comprehensive documentation
+└── GETTING_STARTED.md         # Quick start guide
+```
 
-- **Unstructured Access:**  
-  Most current implementations dump all available tools into the LLM's context, overwhelming it with options and increasing hallucination risks.
+## 📚 Documentation
 
----
-<img width="1072" alt="image" src="https://github.com/user-attachments/assets/a3744678-8996-42e5-9ebc-8379d29ceedc" />
+- **[🚀 Getting Started](GETTING_STARTED.md)** - Quick 5-minute setup guide
+- **[📖 Complete Documentation](UNIFIED_GATEWAY_README.md)** - Comprehensive system documentation
+- **[⚙️ Environment Setup](.env.example)** - Configuration options
 
-## ✅ Solution: The Unified MCP Tool Graph
+## 🛠️ Available Tools
 
-This project proposes a structured, queryable solution: a **vendor-agnostic Neo4j graph database** of tools/APIs sourced from MCP servers (e.g., LinkedIn, Google, Facebook, Notion, etc.).
+### Dynamic Mode (with Neo4j)
+- `dynamic_tool_retriever` - Intelligent tool discovery using semantic similarity
 
-### 🔍 Key Capabilities:
-- **Centralized Tool Intelligence:**  
-  Store API descriptions, metadata, parameters, and inter-tool relationships in a graph format.
+### Fallback Mode (without Neo4j)
+- `web_search` - Search the web for information
+- `read_file` - Read file contents
+- `write_file` - Write content to files
+- `list_directory` - List directory contents
+- `run_command` - Execute system commands
+- And many more via the everything server...
 
-- **LLM-Friendly Query Layer:**  
-  Agents can retrieve only the 3–4 most relevant tools per task using metadata and relationships, minimizing confusion.
+### Always Available
+- `sequential_thinking` - Step-by-step reasoning and problem solving
+- `get_current_time` - Get current date and time
+- `get_timezone` - Get timezone information
 
-- **Semantic Differentiation:**  
-  Capture similarities and differences between tools using graph relationships (e.g., `overlaps_with`, `extends`, `preferred_for_task`) to guide decision-making.
+## 🔌 API Endpoints
 
----
+- `POST /tools/list` - List all available tools
+- `POST /tools/call` - Call a specific tool
+- `POST /tools/get_server_status` - Get server status
+- `POST /tools/test_server_connection` - Test server connection
+- `POST /tools/get_system_info` - Get system information
 
-## Modular Extensions
+## 🎯 Use Cases
 
-While the graph is the core, it enables powerful downstream use cases:
+- **AI Agent Development**: Provide tools for AI agents to interact with the world
+- **Workflow Automation**: Chain multiple tools together for complex workflows
+- **API Gateway**: Unified interface for accessing diverse MCP servers
+- **Development Platform**: Build applications that need access to various tools
 
-### Dynamic Tool Retrieval (DTR):
-> A modular LangChain/Autogen chatbot extension that queries the graph and surfaces a minimal, accurate toolset for any given user intent.
+## 🔧 Optional: Enable Neo4j
 
-This prevents LLMs from blindly scanning a massive tool library and instead gives them just what they need to complete the job — nothing more, nothing less.
-
-
-**Key Implementation:**
-- MCP servers are spun up on demand (using configs from the tool retriever MCP and GitHub), and shut down after inactivity.
-- Only the 5 most popular MCPs are kept running at all times; others are ephemeral.
-- Agents (A2A or LangGraph) only see the tools relevant to the current query, not the full universe of tools.
-
----
-
-## Core Objectives
-
-| Goal | Description |
-|------|-------------|
-| **Tool Ingestion** | Fetch APIs and schemas from public/private MCP servers and normalize them |
-| **Tool Relationship Mapping** | Define graph edges like `overlaps_with`, `requires_auth`, `preferred_for`, `belongs_to_vendor` |
-| **LLM-Oriented Queries** | Return task-specific tool bundles in real time |
-| **Scalable Ecosystem** | Continuously add vendors and tools without retraining or hardcoding |
-| **Agent-Aware Structure** | Guide LLM reasoning with metadata-rich, searchable tool representations |
-
----
-
-## Key Advantages
-
-- **Reduces Tool Confusion in LLMs**  
-  Prevents tool overload by showing only task-relevant options. Avoids infinite call loops and incorrect tool selections.
-
-- **Vendor-Agnostic Integration**  
-  Unifies APIs from different providers into a single intelligent system.
-
-- **Maps Interoperability**  
-  Captures how tools relate or depend on each other, useful for chaining APIs in workflows.
-
-- **Optimized Agentic Reasoning**  
-  Empowers LLMs to reason efficiently with fewer distractions in the context window.
-
-- **Scalable & Modular**  
-  Can be updated independently of LLM or chatbot infrastructure. Extendable across any agent stack.
-
----
-
-## Example Use Cases
-
-- **"I want to schedule a post on LinkedIn and share it in Slack."**  
-  → Graph returns only the relevant `create_post`, `schedule_post`, and `send_message` tools.
-
-- **Custom AI Assistants for Enterprises:**  
-  Only expose internal tools from the graph, filtered by access, scope, or function.
-
-- **Smart Recommender Agents:**  
-  Suggest best-matched tools based on tags, popularity, success rate, or dependencies.
-
-**Integrations with LangGraph and A2A are available in the `Example_Agents` directory for streamlined agent workflows and dynamic tool orchestration.**
-
----
-
-## 🛠️ How It Works (Summary)
-
-1. **User submits a query** (e.g., "Schedule a LinkedIn post and share it in Slack.")
-2. **Dynamic Tool Retriever MCP** queries the Neo4j graph and returns the most relevant tools **plus their MCP server configs** (fetched from GitHub if needed).
-3. **MCP Server Manager** spins up/connects to only the required MCP servers (using the configs), and keeps them alive for 10 minutes after last use.
-4. **Agent** (A2A or LangGraph) loads only the retrieved tools and executes the workflow.
-5. **Result** is returned to the user, with minimal tool confusion and maximum efficiency.
-
----
----
-
-## Coming Soon
-
-- **Graph Ingestion Scripts**
-- **Schema Blueprint + Cypher Queries**
-- **Tool Visualization Playground**
-- **LangChain DTR Chatbot Plug-in**
-- **How-to Tutorials & Use Cases**
-
----
-
-## Getting Started
+For full dynamic tool retrieval capabilities:
 
 ```bash
-git clone https://github.com/your-username/unified-mcp-tool-graph.git
-cd unified-mcp-tool-graph
-# Coming soon: ingestion pipeline, schema docs, and sample queries
+# Using Docker (easiest)
+docker run -d \
+  --name neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/your_password \
+  neo4j:latest
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your Neo4j credentials
+
+# Restart gateway
+./start_gateway.sh
 ```
 
----
+## 🚨 Troubleshooting
 
-## Contributing
+### Common Issues
+- **"npx not found"**: Install Node.js from [nodejs.org](https://nodejs.org)
+- **"mcp-proxy not found"**: Run `pip install --break-system-packages mcp-proxy`
+- **"Port already in use"**: Change ports in `.env` file
+- **Neo4j connection failed**: System automatically falls back to everything server
 
-If you’re passionate about agentic AI, graph databases, or LLM integration — we’d love your help!
+### Get Help
+- Check [troubleshooting section](UNIFIED_GATEWAY_README.md#-troubleshooting) in full documentation
+- Review system logs for error messages
+- Open an issue if you need assistance
 
-- Submit ideas or vendor sources
-- Open PRs for schema/design improvements
-- Star the repo to support this research
+## 🤝 Contributing
 
----
+We welcome contributions! Please see our [development setup guide](UNIFIED_GATEWAY_README.md#-contributing) for details on:
+- Setting up the development environment
+- Running tests
+- Adding new servers
+- Code formatting guidelines
 
-## License
+## 📄 License
 
-MIT License — free for academic, personal, and commercial use.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
----
+## 🙏 Acknowledgments
 
-## Summary
-
-Instead of dumping 100+ tools into a model’s prompt and expecting it to choose wisely, the **Unified MCP Tool Graph** equips your LLM with structure, clarity, and relevance.
-
-It **fixes tool confusion**, **prevents infinite loops**, and enables **modular, intelligent agent workflows**.
-
-Let’s build smarter systems — one tool graph at a time.
-
----
-
-**Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
-
-## Updates on Development
-#### Clustering on multi label open-ended usecases.
-
-<img width="1072" alt="image" src="https://github.com/user-attachments/assets/a3744678-8996-42e5-9ebc-8379d29ceedc" />
-
-****Created a GraphDB with Vendor and tools with embedings for vector search.
-Need a way to categorize vendors and connect vendors with same category. eg( Web Search, File System, Social Media etc.)
-No of Tools Supported 11066
-No of MCP Servers(Official + Community) 4161****
-
-![UnifiedMCPToolGraph](https://github.com/user-attachments/assets/1ac65df1-3c0d-44a8-96c4-efc0b1352b6c)
-
-
-
-#### Query = I want to post a linkedIn post about the latest trends in AI.
-```
-Here are the top 5 tools recommended based on your task of creating a LinkedIn post about AI trends, along with brief explanations to help you choose:
+- [Model Context Protocol](https://modelcontextprotocol.io/) team for the foundational framework
+- [FastMCP](https://github.com/jlowin/fastmcp) for the server implementation
+- [Neo4j](https://neo4j.com/) for graph database capabilities
+- All MCP server contributors in the community
 
 ---
 
-### 1. **linkedin_post_generator** (Likely the Most Relevant)  
-**Description**: Generates optimized LinkedIn posts with engaging headlines, content structure, and hashtags tailored for professional audiences.  
-**Why Use**: Directly creates polished posts while suggesting multimedia (images, videos) and tone adjustments for maximum engagement.  
-
----
-
-### 2. **ai_search** (Top Search Tool)  
-**Vendor**: Higress AI-Search  
-**Key Feature**: Aggregates **real-time data** from Google/Bing/Quark and academic sources like ArXiv for cutting-edge AI research and industry trends.  
-**How to Use**:  
-   - Query: `Latest AI trends 2024` → Get recent news, research papers, and opinion pieces.  
-   - Useful for ensuring your post cites fresh, credible sources.  
-
----
-
-### 3. **tavily-search** (Comprehensive Web Research)  
-**Vendor**: Tavily  
-**Key Feature**: AI-powered search with advanced filters (e.g., `time_range`, `exclude_domains`) to curate content from trusted sources.  
-**How to Use**:  
-   - Example: Search for "recent AI breakthroughs 2024" → Pull articles from tech blogs, IEEE, or MIT Tech Review to highlight in your post.  
-
----
-
-### 4. **query_repository** (If Curating Open-Source or GitHub Content)  
-**Vendor**: GitHub Chat  
-**Use Case**:  
-   - If your post references open-source projects (e.g., "Top AI tools from GitHub 2024"), use this to query repositories for trending AI-related code/repos.  
-
----
-
-### 5. **social_media_analytics** (Post-Creation Optimization)  
-**Use Case**:  
-   - After drafting your post, analyze engagement metrics (e.g., "Which AI topics are trending this week?") to refine your draft based on what performs well on LinkedIn.  
-
----
-
-### Recommended Workflow:  
-1. **Research** using **ai_search** or **tavily-search** to gather the latest AI news and data (e.g., LLM progress, ethical AI debates).  
-2. **Craft the Post** with **linkedin_post_generator** to ensure professional formatting and engagement hooks.  
-3. **Validate** with quick checks via **query_repository** (if citing open-source tools) or **social_media_analytics** for topic popularity.  
-
-Let me know if you'd like step-by-step instructions for any specific tool!
-```
-
-## MCP Server Proxying with mcp-proxy
-
-This project uses [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) to expose stdio-based MCP servers as HTTP endpoints. `mcp-proxy` acts as a bridge between stdio MCP servers and HTTP clients, supporting both Streamable HTTP and SSE transports.
-
-### How it works
-- MCP servers are launched as subprocesses (stdio) and registered with `mcp-proxy`.
-- Each server is exposed at:
-  - `http://localhost:<port>/servers/<name>/` (Streamable HTTP, POST)
-  - `http://localhost:<port>/servers/<name>/sse` (SSE, GET)
-- The official MCP Python SDK can connect to the `/sse` endpoint using `sse_client`:
-
-```python
-from mcp.client.sse import sse_client
-from mcp.client.session import ClientSession
-import asyncio
-
-async def main():
-    mcp_url = "http://localhost:9000/servers/time/sse"
-    async with sse_client(mcp_url) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            # ... interact with the server ...
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for more details on configuration and advanced usage.
+**Ready to build with MCP? Start with our [🚀 Getting Started Guide](GETTING_STARTED.md)!**
 
 
