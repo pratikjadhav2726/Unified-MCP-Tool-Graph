@@ -126,35 +126,77 @@ class WorkingUnifiedMCPGateway:
                 logger.warning(f"Failed to discover tools from {server_name}: {e}")
     
     async def _discover_tools_from_server(self, server_name: str, url: str):
-        """Discover tools from a single server."""
+        """Discover tools from a single server with retry logic."""
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         logger.info(f"Discovering tools from {server_name} at {url}")
         
-        try:
-            # Create a temporary connection to discover tools
-            async with sse_client(url=url, timeout=10.0, sse_read_timeout=30.0) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    
-                    # Get tools
-                    tools_response = await session.list_tools()
-                    tools = getattr(tools_response, "tools", [])
-                    
-                    for tool in tools:
-                        tool_key = f"{server_name}.{tool.name}"
-                        self.tool_catalog[tool_key] = {
-                            "server_name": server_name,
-                            "tool_name": tool.name,
-                            "tool_info": tool,
-                            "url": url,
-                            "description": getattr(tool, "description", "")
-                        }
-                        logger.debug(f"Registered tool: {tool_key}")
-                    
-                    logger.info(f"✓ Discovered {len(tools)} tools from {server_name}")
-                    
-        except Exception as e:
-            logger.error(f"✗ Failed to discover tools from {server_name}: {e}")
-            raise
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Create a temporary connection to discover tools
+                logger.debug(f"Creating SSE client connection to {url} (attempt {attempt + 1}/{max_retries})")
+                async with sse_client(url=url, timeout=15.0, sse_read_timeout=60.0) as (read, write):
+                    logger.debug(f"SSE client connected to {server_name}")
+                    async with ClientSession(read, write) as session:
+                        logger.debug(f"ClientSession created for {server_name}")
+                        await session.initialize()
+                        logger.debug(f"ClientSession initialized for {server_name}")
+                        
+                        # Get tools
+                        logger.debug(f"Requesting tools list from {server_name}")
+                        tools_response = await session.list_tools()
+                        tools = getattr(tools_response, "tools", [])
+                        logger.debug(f"Received {len(tools)} tools from {server_name}")
+                        
+                        for tool in tools:
+                            tool_key = f"{server_name}.{tool.name}"
+                            output_schema = getattr(tool, "outputSchema", None)
+                            logger.debug(f"Processing tool: {tool.name}")
+                            logger.debug(f"  - inputSchema: {bool(tool.inputSchema)}")
+                            logger.debug(f"  - outputSchema: {bool(output_schema)} ({'null - this is normal' if output_schema is None else 'defined'})")
+                            
+                            self.tool_catalog[tool_key] = {
+                                "server_name": server_name,
+                                "tool_name": tool.name,
+                                "tool_info": tool,
+                                "inputSchema": tool.inputSchema,
+                                "outputSchema": output_schema,
+                                "url": url,
+                                "description": getattr(tool, "description", "")
+                            }
+                            logger.debug(f"Registered tool: {tool_key}")
+                        
+                        logger.info(f"✓ Discovered {len(tools)} tools from {server_name}")
+                        return  # Success, exit retry loop
+                        
+            except asyncio.TimeoutError as e:
+                logger.warning(f"Timeout connecting to {server_name} at {url} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Final timeout connecting to {server_name} after {max_retries} attempts")
+                    raise
+            except ConnectionError as e:
+                logger.warning(f"Connection error to {server_name} at {url} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Final connection error to {server_name} after {max_retries} attempts")
+                    raise
+            except Exception as e:
+                logger.warning(f"Error discovering tools from {server_name} (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    logger.error(f"✗ Failed to discover tools from {server_name} after {max_retries} attempts: {type(e).__name__}: {e}")
+                    # Import traceback to get full stack trace
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    raise
     
     async def call_tool_on_server(self, server_name: str, tool_name: str, arguments: dict) -> Any:
         """Call a tool on a specific server using a fresh connection."""
@@ -162,11 +204,13 @@ class WorkingUnifiedMCPGateway:
         if not url:
             raise ValueError(f"Server {server_name} not configured")
         
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         logger.info(f"Calling tool {tool_name} on {server_name} with args: {arguments}")
         
         try:
             # Create a fresh connection for this tool call
-            async with sse_client(url=url, timeout=10.0, sse_read_timeout=300.0) as (read, write):
+            async with sse_client(url=url, timeout=15.0, sse_read_timeout=300.0) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     
@@ -231,8 +275,10 @@ class WorkingUnifiedMCPGateway:
             return {"error": f"Server {server_name} not configured"}
         
         url = self.server_urls[server_name]
+        # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+        url = url.replace("localhost", "127.0.0.1")
         try:
-            async with sse_client(url=url, timeout=5.0) as (read, write):
+            async with sse_client(url=url, timeout=10.0) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     return {"status": "connected", "server": server_name, "url": url}
@@ -252,7 +298,9 @@ class WorkingUnifiedMCPGateway:
                     "name": tool_key,
                     "description": tool_info["description"],
                     "server": tool_info["server_name"],
-                    "actual_name": tool_info["tool_name"]
+                    "actual_name": tool_info["tool_name"],
+                    "inputSchema": tool_info["inputSchema"],
+                    "outputSchema": tool_info.get("outputSchema")
                 })
             return tools
         
@@ -283,8 +331,10 @@ class WorkingUnifiedMCPGateway:
                 return {"error": f"Server {server_name} not configured"}
             
             url = self.server_urls[server_name]
+            # Normalize hostname to avoid localhost vs 127.0.0.1 issues
+            url = url.replace("localhost", "127.0.0.1")
             try:
-                async with sse_client(url=url, timeout=5.0) as (read, write):
+                async with sse_client(url=url, timeout=10.0) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         return {"status": "connected", "server": server_name, "url": url}
@@ -352,7 +402,7 @@ def start_mcp_servers():
                 "args": ["mcp-server-time"]
             }
         })
-    
+        
     # Initialize and start server manager
     manager = MCPServerManager(popular_servers=POPULAR_SERVERS, proxy_port=9000)
     
@@ -378,16 +428,37 @@ async def main():
         logger.error("Failed to start MCP servers")
         return
     
-    # Wait for servers to start
-    logger.info("Waiting for servers to start...")
-    await asyncio.sleep(5)
+    # Wait longer for servers to start and add health check
+    logger.info("Waiting for servers to fully initialize...")
+    await asyncio.sleep(10)  # Increased from 5 to 10 seconds
     
     # Initialize gateway
     gateway = WorkingUnifiedMCPGateway()
     
     try:
-        # Initialize from configuration
-        await gateway.initialize_from_config("mcp_client_config.json")
+        # Wait a bit more and then test connectivity before tool discovery
+        logger.info("Testing server connectivity before tool discovery...")
+        await asyncio.sleep(2)
+        
+        # Initialize from configuration with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await gateway.initialize_from_config("mcp_client_config.json")
+                if len(gateway.tool_catalog) > 0:
+                    break
+                else:
+                    logger.warning(f"No tools discovered on attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        logger.info("Retrying tool discovery in 3 seconds...")
+                        await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"Tool discovery attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("Retrying in 3 seconds...")
+                    await asyncio.sleep(3)
+                else:
+                    raise
         
         logger.info("=== Working Unified MCP Gateway Ready ===")
         logger.info(f"Available tools: {list(gateway.tool_catalog.keys())}")
