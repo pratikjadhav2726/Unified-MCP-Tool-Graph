@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_TOP_K = 3
-CANDIDATE_MULTIPLIER = 10
+CANDIDATE_MULTIPLIER = 5  # Reduced from 10 to 5 for better performance
 SERVER_NAME = "DynamicToolRetrieverMCP"
+CONFIG_FETCH_TIMEOUT = 15  # Maximum time to wait for config fetching
+MAX_CONCURRENT_CONFIGS = 5  # Reduced concurrent config fetches for better stability
 
 # Initialize MCP Server
 mcp = FastMCP(SERVER_NAME)
@@ -78,7 +80,7 @@ class ToolResponse(BaseModel):
 
 async def fetch_tool_config_pair(tool: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """
-    Fetch MCP configuration for a tool from its repository.
+    Fetch MCP configuration for a tool from its repository with timeout.
     
     Args:
         tool: Tool information dictionary
@@ -92,9 +94,16 @@ async def fetch_tool_config_pair(tool: Dict[str, Any]) -> Tuple[Dict[str, Any], 
         return tool, None
     
     try:
-        config = await extract_config_from_github_async(repo_url)
+        # Add timeout to config extraction
+        config = await asyncio.wait_for(
+            extract_config_from_github_async(repo_url),
+            timeout=10.0  # 10 second timeout per config fetch
+        )
         logger.debug(f"Successfully extracted config for {tool.get('tool_name')}")
         return tool, config
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout extracting config from {repo_url}")
+        return tool, None
     except Exception as e:
         logger.warning(f"Failed to extract config from {repo_url}: {e}")
         return tool, None
@@ -134,6 +143,9 @@ def build_tool_response(tool: Dict[str, Any], config: Optional[Dict[str, Any]]) 
     Returns:
         Formatted tool response dictionary
     """
+    # Return null for mcp_server_config if config is None or empty
+    mcp_config = None if not config or not config.get("mcpServers") else config
+    
     return {
         "tool_name": tool.get("tool_name", "Unknown"),
         "tool_description": tool.get("tool_description", "No description available"),
@@ -142,7 +154,7 @@ def build_tool_response(tool: Dict[str, Any], config: Optional[Dict[str, Any]]) 
         "vendor_name": tool.get("vendor_name", "Unknown Vendor"),
         "vendor_repo": tool.get("vendor_repository_url"),
         "similarity_score": tool.get("score", 0.0),
-        "mcp_server_config": config
+        "mcp_server_config": mcp_config
     }
 
 @mcp.tool()
@@ -186,43 +198,67 @@ async def dynamic_tool_retriever(input: DynamicRetrieverInput) -> List[Dict[str,
         available_keys = get_available_env_keys_from_dotenv()
         logger.debug(f"Found {len(available_keys)} available environment keys")
         
-        # Step 4: Fetch MCP configurations asynchronously
-        tool_config_pairs = await asyncio.gather(
-            *[fetch_tool_config_pair(tool) for tool in initial_tools],
-            return_exceptions=True
-        )
+        # Step 4: Fetch MCP configurations asynchronously with timeout and concurrency control
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONFIGS)
         
-        # Filter out exceptions and process results
+        async def fetch_with_semaphore(tool):
+            async with semaphore:
+                return await fetch_tool_config_pair(tool)
+        
+        try:
+            # Apply overall timeout to the entire config fetching process
+            tool_config_pairs = await asyncio.wait_for(
+                asyncio.gather(
+                    *[fetch_with_semaphore(tool) for tool in initial_tools],
+                    return_exceptions=True
+                ),
+                timeout=CONFIG_FETCH_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Config fetching timed out after {CONFIG_FETCH_TIMEOUT} seconds")
+            # Return empty list if timeout occurs - no tools without configs
+            return []
+        
+        # Filter out exceptions and process results - ONLY return tools with valid configs
         valid_pairs = []
+        
         for result in tool_config_pairs:
             if isinstance(result, Exception):
                 logger.warning(f"Config fetch failed: {result}")
                 continue
             
             tool, config = result
-            if validate_environment_requirements(config, available_keys):
+            # Only include tools that have successfully retrieved MCP server configs
+            if config and validate_environment_requirements(config, available_keys):
                 valid_pairs.append((tool, config))
+            else:
+                logger.debug(f"Excluding tool {tool.get('tool_name', 'Unknown')} - no valid MCP config found")
         
-        logger.info(f"Found {len(valid_pairs)} tools with valid configurations")
+        logger.info(f"Found {len(valid_pairs)} tools with valid MCP server configurations")
         
-        # Step 5: Rank by similarity and select top-k
+        # Step 5: Rank by similarity and select top-k (only from tools with valid configs)
         ranked_pairs = sorted(
             valid_pairs,
-            key=lambda pair: pair[0].get("score", 0.0),
+            key=lambda pair: pair[0].get("score", 0.0),  # Sort by similarity score
             reverse=True
         )
         
         selected_pairs = ranked_pairs[:input.top_k]
         selected_tool_names = [pair[0].get("tool_name", "Unknown") for pair in selected_pairs]
-        logger.info(f"Selected tools: {selected_tool_names}")
+        logger.info(f"Selected tools with valid configs: {selected_tool_names}")
         
-        # Step 6: Build final response
+        # Step 6: Build final response (only tools with valid configs)
         response = [
             build_tool_response(tool, config) 
             for tool, config in selected_pairs
         ]
         
-        logger.info(f"Successfully retrieved {len(response)} tools")
+        # Return empty list if no tools found with valid configs
+        if not response:
+            logger.info("No tools found with valid MCP server configurations")
+            return []
+        
+        logger.info(f"Successfully retrieved {len(response)} tools with valid MCP server configurations")
         return response
         
     except Exception as e:

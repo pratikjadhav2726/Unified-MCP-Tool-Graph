@@ -126,13 +126,13 @@ def retrieve_top_k_tools(embedding: list[float], top_k: int = 3, official_only: 
             CALL db.index.vector.queryNodes('tool_vector_index', $topK, queryEmbedding)
             YIELD node, score AS base_score
             MATCH (node)-[:BELONGS_TO_VENDOR]->(vendor:Vendor)
-            WHERE (node.disabled IS NULL OR node.disabled = false)
+            WHERE (COALESCE(node.disabled, false) = false)
             """
             if official_only:
-                cypher += " AND (vendor.is_official = true OR node.is_official = true)"
+                cypher += " AND (COALESCE(vendor.is_official, false) = true OR COALESCE(node.is_official, false) = true)"
             cypher += """
             WITH node, vendor, base_score,
-                 CASE WHEN (vendor.is_official = true OR node.is_official = true) THEN base_score * boost ELSE base_score END AS score
+                 CASE WHEN (COALESCE(vendor.is_official, false) = true OR COALESCE(node.is_official, false) = true) THEN base_score * boost ELSE base_score END AS score
             RETURN 
                 node.name AS tool_name,
                 node.description AS tool_description,

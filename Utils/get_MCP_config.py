@@ -42,7 +42,8 @@ async def fetch_github_page_async(url):
     else:
         raw_url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/README.md"
     try:
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=10)  # 10 second timeout
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(raw_url) as response:
                 if response.status != 200:
                     raise Exception(f"Failed to fetch GitHub page: {raw_url} (status {response.status})")
