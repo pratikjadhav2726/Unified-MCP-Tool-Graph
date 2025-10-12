@@ -8,9 +8,26 @@ This guide will get you up and running with the MCP Unified Gateway in just a fe
 Make sure you have:
 - ✅ Python 3.8+ installed
 - ✅ Node.js 16+ installed  
+- ✅ [uv](https://docs.astral.sh/uv/) installed (recommended)
 - ✅ Internet connection (for downloading MCP servers)
 
 ### 2. Install Dependencies
+
+#### Option A: Using uv (Recommended)
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Initialize project and install dependencies
+uv init --no-readme
+uv add python-dotenv aiohttp requests neo4j sentence-transformers langchain-mcp-adapters pydantic a2a-sdk langchain-groq langgraph langchain langchain-community mcp fastapi uvicorn httpx pytest pytest-asyncio mcp-proxy
+
+# Install essential MCP servers
+npm install -g @modelcontextprotocol/server-everything
+npm install -g @modelcontextprotocol/server-sequential-thinking
+```
+
+#### Option B: Using pip (Alternative)
 ```bash
 # Install Python packages
 pip install -r requirements.txt
@@ -21,6 +38,13 @@ npm install -g @modelcontextprotocol/server-sequential-thinking
 ```
 
 ### 3. Start the Gateway
+
+#### With uv (Recommended)
+```bash
+uv run python start_unified_gateway.py
+```
+
+#### With pip
 ```bash
 # Make startup script executable (Linux/Mac)
 chmod +x start_gateway.sh
