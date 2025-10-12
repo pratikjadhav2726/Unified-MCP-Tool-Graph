@@ -1,0 +1,26 @@
+[project]
+name = "unified-mcp-tool-graph"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-sdk>=0.3.8",
+    "aiohttp>=3.13.0",
+    "fastapi>=0.119.0",
+    "httpx>=0.28.1",
+    "langchain>=0.3.27",
+    "langchain-community>=0.3.31",
+    "langchain-groq>=0.3.8",
+    "langchain-mcp-adapters>=0.1.11",
+    "langgraph>=0.6.10",
+    "mcp>=1.17.0",
+    "mcp-proxy>=0.8.2",
+    "neo4j>=6.0.2",
+    "pydantic>=2.12.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
+    "sentence-transformers>=5.1.1",
+    "uvicorn>=0.37.0",
+]

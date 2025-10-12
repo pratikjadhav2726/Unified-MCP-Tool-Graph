@@ -70,7 +70,11 @@ def check_dependencies():
     
     for package in required_packages:
         try:
-            __import__(package.replace("-", "_"))
+            # Handle special cases for package import names
+            import_name = package.replace("-", "_")
+            if package == "python-dotenv":
+                import_name = "dotenv"
+            __import__(import_name)
         except ImportError:
             missing_required.append(package)
     
