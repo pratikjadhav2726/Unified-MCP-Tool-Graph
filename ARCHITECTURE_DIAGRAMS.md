@@ -1,0 +1,939 @@
+# Architecture Diagrams - Unified MCP Tool Graph
+
+This document contains visual representations of the current and proposed architectures.
+
+---
+
+## 1. Current Architecture (Monolithic)
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                                 CLIENT LAYER                              │
+│                                                                           │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────────────┐ │
+│  │   Next.js UI    │  │  LangGraph Agent │  │   A2A Agent (Python)    │ │
+│  │  (TypeScript)   │  │    (Python)      │  │                         │ │
+│  └────────┬────────┘  └────────┬─────────┘  └───────────┬─────────────┘ │
+│           │                    │                         │               │
+│           └────────────────────┴─────────────────────────┘               │
+│                                 │                                         │
+└─────────────────────────────────┼─────────────────────────────────────────┘
+                                  │ HTTP/SSE
+                                  │
+┌─────────────────────────────────▼─────────────────────────────────────────┐
+│                         UNIFIED GATEWAY (Port 8000)                       │
+│                                                                           │
+│  ┌───────────────────────────────────────────────────────────────────┐   │
+│  │              WorkingUnifiedMCPGateway (Python)                    │   │
+│  │                                                                   │   │
+│  │  • Tool Discovery & Cataloging (in-memory dict)                  │   │
+│  │  • Request Routing (route_tool_call)                             │   │
+│  │  • Connection Management (fresh SSE per call)                    │   │
+│  │  • Meta-tools: list_tools, call_tool, get_server_status          │   │
+│  │  • Neo4j Fallback Detection                                      │   │
+│  └───────────────────────────────────────────────────────────────────┘   │
+│                                                                           │
+└─────────────────────────────────┬─────────────────────────────────────────┘
+                                  │ SSE Connections
+                                  │
+┌─────────────────────────────────▼─────────────────────────────────────────┐
+│                      MCP PROXY LAYER (Port 9000)                          │
+│                                                                           │
+│  ┌───────────────────────────────────────────────────────────────────┐   │
+│  │              MCPServerManager (Python)                            │   │
+│  │                                                                   │   │
+│  │  • Subprocess Management (mcp-proxy)                             │   │
+│  │  • Config Generation (mcp_proxy_servers.json)                    │   │
+│  │  • Popular Servers (always-on): 5 servers                        │   │
+│  │  • Dynamic Servers (on-demand): 10-min TTL                       │   │
+│  │  • Idle Cleanup (background thread)                              │   │
+│  └───────────────────────────────────────────────────────────────────┘   │
+│                                                                           │
+└─────┬───────────┬────────────┬──────────────┬──────────────┬─────────────┘
+      │           │            │              │              │
+      │ stdio     │ stdio      │ stdio        │ stdio        │ stdio
+      │           │            │              │              │
+┌─────▼─────┐ ┌──▼────────┐ ┌─▼───────────┐ ┌▼────────────┐ ┌▼───────────┐
+│ Dynamic   │ │Everything │ │Sequential   │ │Time Server  │ │Custom      │
+│ Tool      │ │Server     │ │Thinking     │ │             │ │MCP Servers │
+│ Retriever │ │           │ │Server       │ │             │ │(on-demand) │
+│ MCP       │ │(Fallback) │ │             │ │             │ │            │
+└─────┬─────┘ └───────────┘ └─────────────┘ └─────────────┘ └────────────┘
+      │
+      │ Bolt Protocol
+      │
+┌─────▼─────────────────────────────────────────────────────────────────────┐
+│                        NEO4J GRAPH DATABASE                               │
+│                      (bolt://localhost:7687)                              │
+│                                                                           │
+│  • 11,066 Tool Nodes (with 384-dim embeddings)                           │
+│  • 4,161 Vendor Nodes                                                    │
+│  • BELONGS_TO_VENDOR Relationships                                       │
+│  • Vector Index: tool_embeddings (cosine similarity)                     │
+│                                                                           │
+│  Optional: Falls back to "Everything" server if unavailable              │
+└───────────────────────────────────────────────────────────────────────────┘
+
+
+INGESTION PIPELINE (Offline Process):
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  1. Data Collection                                                     │
+│     ├─ Glama API → Data/Glama/all_servers.json                         │
+│     └─ Smithery API → Data/Smithery/smithery_servers_with_tools.json   │
+├─────────────────────────────────────────────────────────────────────────┤
+│  2. Preprocessing (Preprocess_parse_and_embed.py)                       │
+│     ├─ Parse tool schemas (name, description, parameters)              │
+│     ├─ Generate embeddings: SentenceTransformer('all-MiniLM-L6-v2')    │
+│     └─ Output: parsed_tools_with_embeddings.json                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  3. Ingestion (Ingestion_Neo4j.py)                                      │
+│     ├─ Create/Update Vendor nodes                                       │
+│     ├─ Create/Update Tool nodes (with embeddings)                       │
+│     └─ Create BELONGS_TO_VENDOR relationships                           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Request Flow Diagram (Current System)
+
+```
+USER
+  │
+  │ 1. Query: "Schedule LinkedIn post about AI"
+  │
+  ▼
+┌─────────────────────────────────────────────────┐
+│          Frontend / Agent                       │
+│  (Next.js UI or LangGraph Agent)                │
+└───────────────────┬─────────────────────────────┘
+                    │
+                    │ HTTP POST /v1/tools/retrieve
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              2. Dynamic Tool Retriever MCP                           │
+│                                                                      │
+│  a) Embed query: embed_text("Schedule LinkedIn post about AI")      │
+│     → [0.23, -0.45, 0.12, ..., 0.67] (384 dimensions)              │
+│                                                                      │
+│  b) Neo4j Vector Search:                                            │
+│     CALL db.index.vector.queryNodes(                                │
+│       'tool_embeddings', k=15, embedding                            │
+│     ) YIELD node, score                                             │
+│     → Returns top 15 similar tools                                  │
+│                                                                      │
+│  c) Parallel Config Fetching (5 concurrent):                        │
+│     For each tool:                                                  │
+│       - Fetch GitHub README                                         │
+│       - Extract MCP server config (regex parsing)                   │
+│       - Timeout: 10 seconds per tool                                │
+│                                                                      │
+│  d) Environment Validation:                                         │
+│     Check if required API keys exist in .env                        │
+│     (e.g., LINKEDIN_API_KEY, OPENAI_API_KEY)                        │
+│                                                                      │
+│  e) Rank & Filter:                                                  │
+│     - Sort by similarity score                                      │
+│     - Filter out tools without valid configs                        │
+│     - Return top 3 tools with configs                               │
+│                                                                      │
+│  Result: [                                                          │
+│    {                                                                │
+│      "tool_name": "linkedin_post_generator",                        │
+│      "similarity_score": 0.89,                                      │
+│      "mcp_server_config": {                                         │
+│        "mcpServers": {                                              │
+│          "linkedin-mcp": {                                          │
+│            "command": "npx",                                        │
+│            "args": ["-y", "linkedin-mcp"],                          │
+│            "env": {"LINKEDIN_API_KEY": "xxx"}                       │
+│          }                                                          │
+│        }                                                            │
+│      }                                                              │
+│    },                                                               │
+│    {...}, {...}                                                     │
+│  ]                                                                  │
+└────────────────────────┬─────────────────────────────────────────────┘
+                         │
+                         │ 3. Tools + Configs returned
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              MCP Server Manager                                      │
+│                                                                      │
+│  For each retrieved tool:                                           │
+│    a) Check if server is running (in popular_servers or dynamic)    │
+│    b) If not running:                                               │
+│       - Add to mcp_proxy_servers.json                               │
+│       - Restart mcp-proxy subprocess                                │
+│       - Wait for server to be ready (health check)                  │
+│    c) Generate SSE endpoint:                                        │
+│       http://localhost:9000/servers/linkedin-mcp/sse                │
+│    d) Update mcp_client_config.json                                 │
+│    e) Mark server as "used" (reset idle timer)                      │
+│                                                                      │
+│  Servers now running:                                               │
+│    - linkedin-mcp (port 9001)                                       │
+│    - ai-search (port 9002)                                          │
+│    - tavily-mcp (port 9003)                                         │
+└────────────────────────┬─────────────────────────────────────────────┘
+                         │
+                         │ 4. Server endpoints ready
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              Agent Execution (LangGraph)                             │
+│                                                                      │
+│  a) Load ONLY the 3 retrieved tools (not all 11k!)                  │
+│     Tools: [linkedin_post_generator, ai_search, tavily-search]      │
+│                                                                      │
+│  b) Create ReAct Agent:                                             │
+│     LLM: ChatGroq(model="deepseek-r1-distill-llama-70b")            │
+│     Memory: InMemorySaver (session state)                           │
+│                                                                      │
+│  c) Reasoning Loop:                                                 │
+│     Step 1:                                                         │
+│       Thought: "I need to research AI trends first"                 │
+│       Action: ai_search("latest AI trends 2024")                    │
+│       Observation: [search results: LLMs, AGI, Robotics...]         │
+│                                                                      │
+│     Step 2:                                                         │
+│       Thought: "Now generate LinkedIn post with these trends"       │
+│       Action: linkedin_post_generator({                             │
+│         "content": "Here are the top AI trends...",                 │
+│         "hashtags": ["#AI", "#MachineLearning"],                    │
+│         "schedule": "2024-11-14 14:00"                              │
+│       })                                                            │
+│       Observation: {                                                │
+│         "post_id": "abc123",                                        │
+│         "scheduled_for": "2024-11-14 14:00 UTC"                     │
+│       }                                                             │
+│                                                                      │
+│     Step 3:                                                         │
+│       Thought: "Task complete"                                      │
+│       Final Answer: "✅ LinkedIn post scheduled for 2pm today"      │
+│                                                                      │
+│  d) Stream results back to user                                     │
+└────────────────────────┬─────────────────────────────────────────────┘
+                         │
+                         │ 5. For each tool call
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              Unified Gateway (Tool Execution)                        │
+│                                                                      │
+│  Receive: call_tool("linkedin-mcp.create_post", args)               │
+│                                                                      │
+│  a) Look up tool in tool_catalog:                                   │
+│     tool_key = "linkedin-mcp.create_post"                           │
+│     server_name = "linkedin-mcp"                                    │
+│     url = "http://localhost:9000/servers/linkedin-mcp/sse"          │
+│                                                                      │
+│  b) Create fresh SSE connection:                                    │
+│     async with sse_client(url, timeout=15) as (read, write):        │
+│       async with ClientSession(read, write) as session:             │
+│         await session.initialize()                                  │
+│         result = await session.call_tool("create_post", args)       │
+│                                                                      │
+│  c) Parse result (CallToolResult object):                           │
+│     if result.isError:                                              │
+│       return {"error": result.content}                              │
+│     else:                                                           │
+│       return JSON.parse(result.content[0].text)                     │
+│                                                                      │
+│  Return: {                                                          │
+│    "post_id": "abc123",                                             │
+│    "scheduled_for": "2024-11-14 14:00 UTC",                         │
+│    "preview_url": "https://linkedin.com/..."                        │
+│  }                                                                  │
+└────────────────────────┬─────────────────────────────────────────────┘
+                         │
+                         │ 6. Final response
+                         │
+                         ▼
+                       USER
+                "✅ LinkedIn post scheduled successfully!"
+```
+
+---
+
+## 3. Proposed SaaS Architecture (Microservices)
+
+```
+                    ┌────────────────────────────────────┐
+                    │       EDGE LAYER (Global)          │
+                    │  • Cloudflare / AWS CloudFront     │
+                    │  • DDoS Protection                 │
+                    │  • Static Asset Caching            │
+                    │  • TLS Termination                 │
+                    └──────────────┬─────────────────────┘
+                                   │
+                    ┌──────────────▼─────────────────────┐
+                    │         API GATEWAY                │
+                    │  • Kong / AWS API Gateway          │
+                    │  • Authentication (JWT)            │
+                    │  • Rate Limiting (per org)         │
+                    │  • Request Routing                 │
+                    │  • Telemetry Injection             │
+                    └──────────────┬─────────────────────┘
+                                   │
+        ┌──────────┬───────────────┼──────────────┬──────────┬──────────┐
+        │          │               │              │          │          │
+        ▼          ▼               ▼              ▼          ▼          ▼
+┌────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│   Auth     │ │   Tool   │ │  Agent   │ │   MCP    │ │ Billing  │ │Analytics │
+│  Service   │ │Retrieval │ │ Execution│ │Orchestr. │ │ Service  │ │ Service  │
+│            │ │ Service  │ │ Service  │ │ Service  │ │          │ │          │
+│ • Register │ │ • Semantic│ │ • React  │ │ • K8s    │ │ • Usage  │ │ • Real-  │
+│ • Login    │ │   Search │ │   Agent  │ │   Deploy │ │   Meter  │ │   time   │
+│ • API Keys │ │ • Cache  │ │ • Stream │ │ • Health │ │ • Stripe │ │   Dash   │
+│ • JWT      │ │ • Rank   │ │ • State  │ │   Check  │ │ • Invoice│ │ • A/B    │
+│            │ │          │ │          │ │ • Scale  │ │          │ │   Test   │
+└────────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘
+        │          │               │              │          │          │
+        └──────────┴───────────────┴──────────────┴──────────┴──────────┘
+                                   │
+        ┌──────────────────────────▼──────────────────────────────────────┐
+        │             EVENT BUS (Kafka / AWS EventBridge)                 │
+        │  Topics:                                                        │
+        │    • tool.retrieved   • tool.executed   • user.signup           │
+        │    • server.started   • server.stopped  • billing.usage         │
+        └──────────────────────────┬──────────────────────────────────────┘
+                                   │
+        ┌──────────────────────────▼──────────────────────────────────────┐
+        │                     DATA LAYER (Multi-Region)                   │
+        ├─────────────────────────────────────────────────────────────────┤
+        │                                                                 │
+        │  ┌─────────────────────────────────────────────────────────┐   │
+        │  │ PostgreSQL (AWS RDS Aurora, Multi-AZ)                   │   │
+        │  │  Tables:                                                │   │
+        │  │    • users, organizations, api_keys                     │   │
+        │  │    • subscriptions, usage_events, invoices              │   │
+        │  │    • audit_logs                                         │   │
+        │  │  Replicas: 1 writer + 2 readers                         │   │
+        │  └─────────────────────────────────────────────────────────┘   │
+        │                                                                 │
+        │  ┌─────────────────────────────────────────────────────────┐   │
+        │  │ Neo4j Enterprise Cluster                                │   │
+        │  │  Nodes:                                                 │   │
+        │  │    • Tool (name, description, embedding[384])           │   │
+        │  │    • Vendor (id, name, repo_url, is_official)           │   │
+        │  │  Relationships:                                         │   │
+        │  │    • BELONGS_TO_VENDOR                                  │   │
+        │  │  Topology: 3-node causal cluster                        │   │
+        │  │    - 1 Leader (writes)                                  │   │
+        │  │    - 2 Followers (reads, HA)                            │   │
+        │  │    - 3 Read Replicas (tool retrieval)                   │   │
+        │  └─────────────────────────────────────────────────────────┘   │
+        │                                                                 │
+        │  ┌─────────────────────────────────────────────────────────┐   │
+        │  │ Redis Cluster (AWS ElastiCache)                         │   │
+        │  │  Use Cases:                                             │   │
+        │  │    • L2 Cache (tool catalog, embeddings)                │   │
+        │  │    • Session Store (agent conversations)                │   │
+        │  │    • Rate Limit Counters                                │   │
+        │  │    • Distributed Locks                                  │   │
+        │  │  Topology: 3 shards, 2 replicas each                    │   │
+        │  └─────────────────────────────────────────────────────────┘   │
+        │                                                                 │
+        │  ┌─────────────────────────────────────────────────────────┐   │
+        │  │ S3 / Object Storage                                     │   │
+        │  │  Buckets:                                               │   │
+        │  │    • ingestion/ (tool data from Glama/Smithery)         │   │
+        │  │    • backups/ (DB snapshots)                            │   │
+        │  │    • logs/ (structured JSON logs)                       │   │
+        │  │    • models/ (embedding model checkpoints)              │   │
+        │  └─────────────────────────────────────────────────────────┘   │
+        │                                                                 │
+        └─────────────────────────────────────────────────────────────────┘
+
+
+OBSERVABILITY STACK:
+
+┌──────────────────────────────────────────────────────────────────────┐
+│                         MONITORING                                   │
+│                                                                      │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │   Prometheus    │  │     Grafana      │  │  Jaeger (Traces) │   │
+│  │   (Metrics)     │  │   (Dashboards)   │  │                  │   │
+│  └─────────────────┘  └──────────────────┘  └──────────────────┘   │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │            ELK Stack (Logs)                                 │   │
+│  │  • Elasticsearch (indexing)                                 │   │
+│  │  • Logstash / Fluentd (aggregation)                         │   │
+│  │  • Kibana (visualization)                                   │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │            Alerting                                         │   │
+│  │  • Prometheus Alertmanager                                  │   │
+│  │  • PagerDuty (critical)                                     │   │
+│  │  • Slack (warnings)                                         │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────┘
+
+
+DEPLOYMENT (Kubernetes on AWS EKS):
+
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Kubernetes Cluster (EKS)                          │
+│                                                                      │
+│  Namespaces:                                                         │
+│    • production (live traffic)                                       │
+│    • staging (pre-production testing)                                │
+│    • monitoring (Prometheus, Grafana)                                │
+│                                                                      │
+│  Node Groups:                                                        │
+│    • app-nodes (t3.xlarge, 3-10 nodes, auto-scaling)                │
+│    • mcp-nodes (c5.2xlarge, 2-20 nodes, for MCP servers)            │
+│    • db-nodes (r5.4xlarge, 3 nodes, for Neo4j)                      │
+│                                                                      │
+│  Deployments:                                                        │
+│    • auth-service (3 replicas, HPA enabled)                          │
+│    • tool-retrieval-service (5 replicas, HPA enabled)                │
+│    • agent-execution-service (3 replicas, HPA enabled)               │
+│    • mcp-orchestration-service (2 replicas)                          │
+│    • billing-service (2 replicas)                                    │
+│    • analytics-service (2 replicas)                                  │
+│    • kong-gateway (3 replicas)                                       │
+│                                                                      │
+│  Services:                                                           │
+│    • ClusterIP (internal communication)                              │
+│    • LoadBalancer (external traffic via ALB)                         │
+│                                                                      │
+│  Storage:                                                            │
+│    • EBS volumes (persistent, GP3)                                   │
+│    • EFS (shared, for logs)                                          │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Multi-Region Deployment
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                       AWS ROUTE 53 (DNS)                               │
+│                  Latency-Based Routing Policy                          │
+│                                                                        │
+│  api.unified-mcp.com                                                   │
+│    ├─ US users → us-east-1                                             │
+│    ├─ EU users → eu-central-1                                          │
+│    └─ Asia users → ap-southeast-1                                      │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+        ▼                    ▼                    ▼
+┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+│  US-EAST-1     │  │  EU-CENTRAL-1  │  │ AP-SOUTHEAST-1 │
+│   (Primary)    │  │   (Secondary)  │  │   (Secondary)  │
+├────────────────┤  ├────────────────┤  ├────────────────┤
+│ • EKS Cluster  │  │ • EKS Cluster  │  │ • EKS Cluster  │
+│ • RDS Aurora   │  │ • RDS Aurora   │  │ • RDS Aurora   │
+│   (Writer)     │  │   (Read Rep.)  │  │   (Read Rep.)  │
+│ • Neo4j Leader │  │ • Neo4j Read   │  │ • Neo4j Read   │
+│ • Redis Cluster│  │ • Redis Cluster│  │ • Redis Cluster│
+│ • S3 (primary) │  │ • S3 (replica) │  │ • S3 (replica) │
+└────────────────┘  └────────────────┘  └────────────────┘
+        │                    │                    │
+        └────────────────────┴────────────────────┘
+                             │
+                 Data Replication (async)
+```
+
+---
+
+## 5. Security Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                            CLIENT                                      │
+│  Browser / Mobile App / CLI Tool                                       │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+                             │ HTTPS (TLS 1.3)
+                             │
+┌────────────────────────────▼───────────────────────────────────────────┐
+│                      AWS WAF (Web Application Firewall)                │
+│  • SQL Injection Protection                                            │
+│  • XSS Prevention                                                      │
+│  • Rate Limiting (per IP)                                              │
+│  • Geo-blocking (optional)                                             │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼───────────────────────────────────────────┐
+│                      AWS ALB (Application Load Balancer)               │
+│  • SSL/TLS Termination                                                 │
+│  • X-Forwarded-For headers                                             │
+│  • Health checks                                                       │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼───────────────────────────────────────────┐
+│                      API GATEWAY (Kong)                                │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │              JWT Validation                                      │ │
+│  │  1. Extract token from Authorization header                      │ │
+│  │  2. Verify signature (HMAC-SHA256)                               │ │
+│  │  3. Check expiration (exp claim)                                 │ │
+│  │  4. Validate issuer (iss claim)                                  │ │
+│  │  5. Extract user_id, org_id, scopes                              │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                             │                                          │
+│  ┌──────────────────────────▼──────────────────────────────────────┐  │
+│  │              Rate Limiting                                       │  │
+│  │  • Free tier: 100 req/min per user                               │  │
+│  │  • Pro tier: 1000 req/min per user                               │  │
+│  │  • Enterprise: Unlimited (fair use)                              │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                             │                                          │
+│  ┌──────────────────────────▼──────────────────────────────────────┐  │
+│  │              Authorization (RBAC)                                │  │
+│  │  Check scopes in JWT:                                            │  │
+│  │    • tools:read → Can list tools                                 │  │
+│  │    • tools:execute → Can call tools                              │  │
+│  │    • billing:read → Can view invoices                            │  │
+│  │    • admin → Full access                                         │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼───────────────────────────────────────────┐
+│                      MICROSERVICES (Kubernetes)                        │
+│                                                                        │
+│  • Service-to-Service: mTLS (mutual TLS via Istio)                    │
+│  • Secrets: AWS Secrets Manager                                       │
+│  • IAM Roles: Least privilege (IRSA - IAM Roles for Service Accounts) │
+│  • Network Policies: Restrict pod-to-pod communication                │
+│                                                                        │
+│  Example Network Policy:                                              │
+│    apiVersion: networking.k8s.io/v1                                   │
+│    kind: NetworkPolicy                                                │
+│    metadata:                                                          │
+│      name: allow-auth-to-postgres                                     │
+│    spec:                                                              │
+│      podSelector:                                                     │
+│        matchLabels:                                                   │
+│          app: auth-service                                            │
+│      policyTypes:                                                     │
+│        - Egress                                                       │
+│      egress:                                                          │
+│        - to:                                                          │
+│            - podSelector:                                             │
+│                matchLabels:                                           │
+│                  app: postgres                                        │
+│          ports:                                                       │
+│            - protocol: TCP                                            │
+│              port: 5432                                               │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼───────────────────────────────────────────┐
+│                      DATA LAYER                                        │
+│                                                                        │
+│  • PostgreSQL: TDE (Transparent Data Encryption), encrypted backups    │
+│  • Neo4j: Enterprise encryption at rest + in transit                   │
+│  • Redis: Encrypted ElastiCache, encrypted snapshots                   │
+│  • S3: SSE-S3 (Server-Side Encryption), versioning enabled             │
+│                                                                        │
+│  • IAM Policies: Restrict access by service (not by key)               │
+│  • VPC: Private subnets, no public IPs                                 │
+│  • Security Groups: Whitelist only required ports                      │
+└────────────────────────────────────────────────────────────────────────┘
+
+
+SECRETS MANAGEMENT:
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                 AWS Secrets Manager / HashiCorp Vault               │
+│                                                                     │
+│  Secrets stored:                                                    │
+│    • Database credentials (auto-rotated)                            │
+│    • JWT signing key                                                │
+│    • API keys (Stripe, OpenAI, Groq)                                │
+│    • TLS certificates                                               │
+│                                                                     │
+│  Access:                                                            │
+│    • Kubernetes pods use IRSA (IAM Roles for Service Accounts)      │
+│    • Secrets injected as environment variables at runtime           │
+│    • No secrets in code or Docker images                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Data Flow - Tool Retrieval with Caching
+
+```
+USER QUERY
+"Find tools to post on LinkedIn"
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              L1 Cache (In-Process LRU)                      │
+│              Size: 1000 entries                             │
+│              TTL: 5 minutes                                 │
+└───────────────────┬─────────────────────────────────────────┘
+                    │ MISS
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              L2 Cache (Redis)                               │
+│              Size: 10,000 entries                           │
+│              TTL: 10 minutes                                │
+│              Key: tools:query_hash:<sha256>                 │
+└───────────────────┬─────────────────────────────────────────┘
+                    │ MISS
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              L3 Cache (Neo4j Read Replica)                  │
+│              Query:                                         │
+│                CALL db.index.vector.queryNodes(             │
+│                  'tool_embeddings',                         │
+│                  k=15,                                      │
+│                  embedding=$query_embedding                 │
+│                ) YIELD node, score                          │
+│                WHERE score > 0.7                            │
+│                RETURN node, score                           │
+│                ORDER BY score DESC                          │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Config Fetcher Pool                            │
+│              (Parallel, 10 concurrent workers)              │
+│                                                             │
+│  For each tool:                                             │
+│    1. Check Redis cache: config:<vendor_id>                 │
+│    2. If miss, fetch from GitHub API                        │
+│    3. Parse README (regex for MCP config)                   │
+│    4. Cache in Redis (TTL: 1 hour)                          │
+│    5. Timeout: 5 seconds per tool                           │
+│                                                             │
+│  Circuit Breaker:                                           │
+│    - If 50% failures → OPEN (fast-fail)                     │
+│    - After 30 seconds → HALF-OPEN (retry)                   │
+│    - If success → CLOSED (normal)                           │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Environment Validator                          │
+│                                                             │
+│  For each tool:                                             │
+│    - Check if required env vars exist in .env               │
+│    - Example: LINKEDIN_API_KEY, OPENAI_API_KEY              │
+│    - Filter out tools with missing keys                     │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Ranker & Selector                              │
+│                                                             │
+│  1. Rank by similarity score (cosine distance)              │
+│  2. Boost tools with:                                       │
+│     - User's past usage (collaborative filtering)           │
+│     - Organization's preferences                            │
+│     - Official vs. community (if specified)                 │
+│  3. Select top-k tools (default: 5)                         │
+│  4. Return with full configs                                │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼ RESULT
+[
+  {
+    "tool_name": "linkedin_post_generator",
+    "similarity_score": 0.92,
+    "mcp_server_config": {...},
+    "usage_count": 1234,
+    "last_used": "2024-11-13T10:30:00Z"
+  },
+  {...},
+  {...}
+]
+    │
+    ├─> Store in L2 Cache (Redis, TTL: 10 min)
+    ├─> Store in L1 Cache (LRU, TTL: 5 min)
+    └─> Return to user
+```
+
+---
+
+## 7. Billing & Usage Tracking
+
+```
+TOOL CALL EVENT
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Event Bus (Kafka / EventBridge)                │
+│                                                             │
+│  Topic: tool.executed                                       │
+│  Payload: {                                                 │
+│    "event_id": "uuid",                                      │
+│    "timestamp": "2024-11-13T10:30:00Z",                     │
+│    "user_id": "user_uuid",                                  │
+│    "org_id": "org_uuid",                                    │
+│    "tool_name": "linkedin_post_generator",                  │
+│    "server_name": "linkedin-mcp",                           │
+│    "latency_ms": 1234,                                      │
+│    "success": true,                                         │
+│    "cost_cents": 1  // $0.01                                │
+│  }                                                          │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+        ┌───────────┴────────────┐
+        │                        │
+        ▼                        ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│  Billing Service     │  │  Analytics Service   │
+│  (Consumer)          │  │  (Consumer)          │
+│                      │  │                      │
+│  1. Increment usage  │  │  1. Write to         │
+│     counter in       │  │     ClickHouse       │
+│     PostgreSQL       │  │     (OLAP)           │
+│                      │  │                      │
+│  2. Check quota:     │  │  2. Update real-time │
+│     - Free: 100/mo   │  │     dashboards       │
+│     - Pro: 1000/mo   │  │                      │
+│     - Enterprise:    │  │  3. Trigger A/B test │
+│       Unlimited      │  │     analysis         │
+│                      │  │                      │
+│  3. If over quota:   │  │                      │
+│     - Create invoice │  │                      │
+│       line item      │  │                      │
+│     - Charge via     │  │                      │
+│       Stripe         │  │                      │
+│                      │  │                      │
+│  4. Send email       │  │                      │
+│     notification     │  │                      │
+└──────────────────────┘  └──────────────────────┘
+
+
+BILLING CALCULATION:
+
+┌─────────────────────────────────────────────────────────────┐
+│              Monthly Invoice Generation                     │
+│              (Cron job, runs on 1st of month)               │
+│                                                             │
+│  For each organization:                                     │
+│    1. Query usage_events table:                             │
+│       SELECT                                                │
+│         org_id,                                             │
+│         COUNT(*) AS total_tool_calls,                       │
+│         SUM(cost_cents) AS total_cost_cents                 │
+│       FROM usage_events                                     │
+│       WHERE org_id = $org_id                                │
+│         AND created_at >= $start_of_month                   │
+│         AND created_at < $end_of_month                      │
+│       GROUP BY org_id                                       │
+│                                                             │
+│    2. Calculate total:                                      │
+│       base_price = subscription.monthly_base (e.g. $29)     │
+│       overage = MAX(0, total_tool_calls - monthly_quota)    │
+│       overage_cost = overage * cost_per_tool_call           │
+│       total = base_price + overage_cost                     │
+│                                                             │
+│    3. Create Stripe invoice:                                │
+│       stripe.invoices.create({                              │
+│         customer: org.stripe_customer_id,                   │
+│         auto_advance: true,                                 │
+│         collection_method: 'charge_automatically',          │
+│         description: 'Unified MCP - November 2024'          │
+│       })                                                    │
+│                                                             │
+│    4. Add line items:                                       │
+│       - Base subscription: $29.00                           │
+│       - Tool calls (500 over quota): $5.00                  │
+│       - Total: $34.00                                       │
+│                                                             │
+│    5. Charge & send email notification                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. CI/CD Pipeline
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                      DEVELOPER WORKFLOW                                │
+└────────────────────────────────────────────────────────────────────────┘
+
+Developer pushes code to GitHub
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              GitHub Actions (Trigger)                       │
+│                                                             │
+│  Triggers:                                                  │
+│    • Push to main → Production deployment                   │
+│    • Push to develop → Staging deployment                   │
+│    • Pull request → Run tests                               │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              CI Pipeline (Build & Test)                     │
+│                                                             │
+│  Jobs:                                                      │
+│    1. Lint & Format Check                                   │
+│       - Python: black, flake8, mypy                         │
+│       - TypeScript: eslint, prettier                        │
+│                                                             │
+│    2. Unit Tests                                            │
+│       - Python: pytest (80% coverage)                       │
+│       - TypeScript: jest                                    │
+│                                                             │
+│    3. Integration Tests                                     │
+│       - Spin up test Neo4j, PostgreSQL, Redis               │
+│       - Run end-to-end tests                                │
+│                                                             │
+│    4. Security Scan                                         │
+│       - Snyk (dependency vulnerabilities)                   │
+│       - Trivy (Docker image scanning)                       │
+│                                                             │
+│    5. Build Docker Images                                   │
+│       - Tag: <service>:<commit-sha>                         │
+│       - Push to ECR (AWS Container Registry)                │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│              CD Pipeline (Deploy)                           │
+│                                                             │
+│  Staging Deployment:                                        │
+│    1. Update Kubernetes manifests:                          │
+│       - kustomize edit set image <service>:<new-tag>        │
+│                                                             │
+│    2. Apply to staging namespace:                           │
+│       - kubectl apply -k k8s/overlays/staging               │
+│                                                             │
+│    3. Wait for rollout:                                     │
+│       - kubectl rollout status deployment/<service>         │
+│                                                             │
+│    4. Run smoke tests:                                      │
+│       - Health check endpoints                              │
+│       - Test critical user flows                            │
+│                                                             │
+│  Production Deployment (if staging passes):                 │
+│    1. Manual approval (for now)                             │
+│                                                             │
+│    2. Blue-Green Deployment:                                │
+│       a) Deploy to "green" environment                      │
+│       b) Run smoke tests                                    │
+│       c) Switch traffic from "blue" to "green"              │
+│       d) Monitor for 10 minutes                             │
+│       e) If errors, instant rollback to "blue"              │
+│                                                             │
+│    3. Update production namespace:                          │
+│       - kubectl apply -k k8s/overlays/production            │
+│                                                             │
+│    4. Send Slack notification:                              │
+│       "🚀 Deployed v1.2.3 to production"                    │
+└─────────────────────────────────────────────────────────────┘
+
+
+GitOps with ArgoCD (Alternative):
+
+┌─────────────────────────────────────────────────────────────┐
+│              ArgoCD (Continuous Sync)                       │
+│                                                             │
+│  1. Monitor Git repo: k8s/manifests/                        │
+│  2. Detect changes (new commit)                             │
+│  3. Auto-sync to Kubernetes cluster                         │
+│  4. Health checks & rollback if unhealthy                   │
+│                                                             │
+│  Benefits:                                                  │
+│    • Declarative (Git is source of truth)                   │
+│    • Automated rollback                                     │
+│    • Audit trail (Git history)                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. Disaster Recovery
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                      BACKUP STRATEGY                                   │
+└────────────────────────────────────────────────────────────────────────┘
+
+PostgreSQL (RDS Aurora):
+  • Automated backups: Every 6 hours
+  • Retention: 7 days
+  • Point-in-time recovery: Yes (5 minutes granularity)
+  • Cross-region backup: Replicate to EU-Central-1
+
+Neo4j:
+  • Daily snapshots: 2am UTC
+  • Retention: 30 days
+  • Backup to S3: s3://unified-mcp-prod/backups/neo4j/
+  • Test restore: Monthly (automated)
+
+Redis:
+  • ElastiCache snapshots: Every 24 hours
+  • Retention: 7 days
+  • Not critical (cache can be rebuilt)
+
+S3:
+  • Versioning: Enabled
+  • Lifecycle policies: 
+    - Archive to Glacier after 90 days
+    - Delete after 1 year
+  • Cross-region replication: US-East-1 → EU-Central-1
+
+
+┌────────────────────────────────────────────────────────────────────────┐
+│                      DISASTER SCENARIOS                                │
+└────────────────────────────────────────────────────────────────────────┘
+
+Scenario 1: Database Corruption
+  Recovery Time Objective (RTO): 1 hour
+  Recovery Point Objective (RPO): 5 minutes
+
+  Steps:
+    1. Switch to read replica (promote to primary)
+    2. Restore from latest snapshot
+    3. Apply point-in-time recovery
+    4. Verify data integrity
+    5. Update connection strings
+
+Scenario 2: Region Failure (US-East-1 down)
+  RTO: 30 minutes
+  RPO: 1 hour
+
+  Steps:
+    1. Route53 fails over to EU-Central-1
+    2. Promote RDS read replica to writer
+    3. Scale up Kubernetes pods in EU
+    4. Monitor for cascading failures
+
+Scenario 3: Security Breach (API key leak)
+  RTO: Immediate
+  RPO: N/A
+
+  Steps:
+    1. Rotate all API keys (automated script)
+    2. Invalidate all JWT tokens
+    3. Force user re-authentication
+    4. Audit access logs
+    5. Notify affected users
+
+Scenario 4: DDoS Attack
+  RTO: 5 minutes (auto-mitigation)
+  RPO: N/A
+
+  Steps:
+    1. AWS Shield automatically mitigates
+    2. CloudFront blocks malicious IPs
+    3. Scale up ALB capacity
+    4. Enable rate limiting (stricter)
+```
+
+---
+
+**End of Architecture Diagrams Document**
+
+For implementation details, see: `ARCHITECTURE_AND_SAAS_PLAN.md`
