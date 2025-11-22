@@ -185,68 +185,25 @@ This prevents LLMs from blindly scanning a massive tool library and instead give
 
 ## Getting Started
 
-### Prerequisites
-- Python 3.8+ 
-- Node.js 16+ (for MCP servers)
-- [uv](https://docs.astral.sh/uv/) (recommended for dependency management)
+**👉 See [GETTING_STARTED.md](GETTING_STARTED.md) for complete setup instructions using `uv`.**
 
-### Quick Setup (5 minutes)
+### Quick Start
 
 ```bash
 # Clone the repository
 git clone https://github.com/your-username/unified-mcp-tool-graph.git
 cd unified-mcp-tool-graph
 
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install dependencies with uv
+uv sync
 
-# Initialize project with uv and install dependencies
-uv init --no-readme
-uv add python-dotenv aiohttp requests neo4j sentence-transformers langchain-mcp-adapters pydantic a2a-sdk langchain-groq langgraph langchain langchain-community mcp fastapi uvicorn httpx pytest pytest-asyncio mcp-proxy
-
-# Install Node.js dependencies for MCP servers
-npm install -g @modelcontextprotocol/server-everything
-npm install -g @modelcontextprotocol/server-sequential-thinking
-
-# Start the unified gateway system
+# Start the unified gateway
 uv run python start_unified_gateway.py
 ```
 
-### Alternative Setup (without uv)
+The gateway will be available at `http://localhost:8000` with all tools from all MCP servers accessible through a single endpoint.
 
-```bash
-# Using pip (less recommended)
-pip install -r requirements.txt
-python start_unified_gateway.py
-```
-
-### Test Your Setup
-
-```bash
-# Check if the gateway is running
-curl -X POST http://localhost:8000/tools/get_system_info
-
-# Test a simple tool call
-curl -X POST http://localhost:8000/tools/call \
-  -H "Content-Type: application/json" \
-  -d '{"tool_name": "time.get_current_time", "args": {}}'
-```
-
-### Optional: Neo4j Setup (for full dynamic tool retrieval)
-
-```bash
-# Using Docker (easiest)
-docker run -d \
-  --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/your_password \
-  neo4j:latest
-
-# Create .env file
-echo "NEO4J_URI=bolt://localhost:7687" >> .env
-echo "NEO4J_USER=neo4j" >> .env
-echo "NEO4J_PASSWORD=your_password" >> .env
-```
+For detailed setup instructions, troubleshooting, and configuration options, see **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
 ---
 
@@ -371,4 +328,21 @@ if __name__ == "__main__":
 
 See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for more details on configuration and advanced usage.
 
+---
+
+## 📚 Documentation
+
+- **[GETTING_STARTED.md](GETTING_STARTED.md)** - Complete setup guide using `uv`
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines for contributing
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Community code of conduct
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+**Star the repo to follow the journey and make tools truly *intelligent, searchable, and modular*.**
 

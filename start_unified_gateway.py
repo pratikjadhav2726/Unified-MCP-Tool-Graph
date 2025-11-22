@@ -62,7 +62,7 @@ def check_dependencies():
     
     optional_packages = [
         ("neo4j", "Neo4j database connectivity"),
-        ("sentence_transformers", "Local text embeddings for dynamic tool retrieval")
+        # ("sentence_transformers", "Local text embeddings for dynamic tool retrieval")  # Removed - requires Visual C++ Redistributable on Windows
     ]
     
     missing_required = []
@@ -81,7 +81,8 @@ def check_dependencies():
     for package, description in optional_packages:
         try:
             __import__(package.replace("-", "_"))
-        except ImportError:
+        except (ImportError, OSError, ModuleNotFoundError):
+            # Catch ImportError, OSError (for DLL loading issues), and ModuleNotFoundError
             missing_optional.append((package, description))
     
     if missing_required:
@@ -101,22 +102,24 @@ def check_node_dependencies():
     """Check if required Node.js packages are available."""
     logger = logging.getLogger("UnifiedGatewayStartup")
     
-    # Check if npx is available
+    # Check if npx is available (optional - some servers use uvx instead)
     try:
         subprocess.run(["npx", "--version"], check=True, capture_output=True)
         logger.info("✓ npx is available")
     except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.error("✗ npx not found. Please install Node.js and npm")
-        return False
+        logger.warning("✗ npx not found. Node.js-based MCP servers will not be available")
+        logger.warning("Install Node.js from https://nodejs.org/ to enable Node.js-based servers")
     
     # Check if uvx is available (optional)
     try:
         subprocess.run(["uvx", "--version"], check=True, capture_output=True)
         logger.info("✓ uvx is available")
     except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.warning("✗ uvx not found. Some servers may not be available")
+        logger.warning("✗ uvx not found. Some Python-based servers may not be available")
         logger.warning("Install with: pip install --break-system-packages uv")
     
+    # Return True to allow gateway to start even without Node.js
+    # The gateway can work with Python-based servers or servers already configured
     return True
 
 def validate_environment():
@@ -211,11 +214,9 @@ def main():
         logger.error("❌ Dependency check failed")
         sys.exit(1)
     
-    # Step 2: Check Node.js dependencies
+    # Step 2: Check Node.js dependencies (optional)
     logger.info("📦 Checking Node.js dependencies...")
-    if not check_node_dependencies():
-        logger.error("❌ Node.js dependency check failed")
-        sys.exit(1)
+    check_node_dependencies()  # Warning only, doesn't block startup
     
     # Step 3: Install mcp-proxy if needed
     logger.info("📦 Checking mcp-proxy...")
