@@ -368,6 +368,9 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+Use of popular servers in Cursor
+<img width="1458" height="830" alt="image" src="https://github.com/user-attachments/assets/79455896-c2ce-4c1f-b98e-3b6d18a258c5" />
+
 
 See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for more details on configuration and advanced usage.
 
