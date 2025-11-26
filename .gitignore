@@ -178,11 +178,13 @@ cython_debug/
 # Node.js dependencies (if any are added in the future)
 node_modules/
 
-# Generated MCP configuration files
+# Generated MCP configuration files (use config/*.example as templates)
 mcp_client_config.json
 mcp_proxy_servers.json
 MCP_Server_Manager/mcp_client_config.json
 MCP_Server_Manager/mcp_proxy_servers.json
+config/*.json
+!config/*.example
 
 # Environment files
 .env

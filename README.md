@@ -187,6 +187,26 @@ This prevents LLMs from blindly scanning a massive tool library and instead give
 
 **👉 See [GETTING_STARTED.md](GETTING_STARTED.md) for complete setup instructions using `uv`.**
 
+### Quick Start with Docker
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/unified-mcp-tool-graph.git
+cd unified-mcp-tool-graph
+
+# Copy environment template
+cp env.example .env
+# Edit .env with your configuration
+
+# Start all services
+docker-compose up -d
+
+# Verify deployment
+curl http://localhost:8000/health
+```
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed deployment options.
+
 ### Quick Start
 
 ```bash
@@ -332,9 +352,25 @@ See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for m
 
 ## 📚 Documentation
 
+### Getting Started
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - Complete setup guide using `uv`
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and design
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Deployment guides for various environments
+
+### Development
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines for contributing
+- **[docs/STRUCTURE.md](docs/STRUCTURE.md)** - Project structure and organization
+- **[docs/API.md](docs/API.md)** - API documentation and examples
+
+### Security & Operations
+- **[docs/SECURITY.md](docs/SECURITY.md)** - Security policy and best practices
 - **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** - Community code of conduct
+- **[ISSUES_AND_IMPROVEMENTS.md](ISSUES_AND_IMPROVEMENTS.md)** - Current issues and improvements
+
+### Quick Links
+- **Environment Setup**: Copy `env.example` to `.env` and configure
+- **Docker Deployment**: See `docker-compose.yml` for full stack
+- **Configuration Templates**: See `config/*.example` files
 
 ---
 
