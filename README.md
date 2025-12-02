@@ -139,6 +139,7 @@ This prevents LLMs from blindly scanning a massive tool library and instead give
 ---
 ## 🏗️ Architecture
 
+### Current Architecture (Gateway Pattern)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    MCP Unified Gateway                      │
@@ -161,6 +162,41 @@ This prevents LLMs from blindly scanning a massive tool library and instead give
 │ Database  │
 └───────────┘
 ```
+
+### SaaS MCP Server Architecture (Recommended for SaaS)
+```
+┌─────────────────────────────────────────────────────────────┐
+│              MCP Client (IDE/Agent)                        │
+│         Connects via MCP Protocol (SSE/WebSocket)          │
+└───────────────────────────┬───────────────────────────────┘
+                             │
+                             │ MCP Protocol
+                             │ (with tenant context)
+                             │
+┌───────────────────────────▼─────────────────────────────────┐
+│              SaaS MCP Server (Hosted)                      │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │  Multi-Tenant Connection Manager                      │ │
+│  │  - Tenant identification                              │ │
+│  │  - Session isolation                                 │ │
+│  │  - Tool aggregation                                   │ │
+│  └──────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │  Tool Router & Orchestrator                          │ │
+│  │  - Routes to underlying MCP servers                  │ │
+│  │  - Tenant-specific filtering                         │ │
+│  └──────────────────────────────────────────────────────┘ │
+└───────────────────────────┬───────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+┌───────▼────────┐  ┌───────▼────────┐  ┌───────▼────────┐
+│  MCP Server 1  │  │  MCP Server 2  │  │  MCP Server N  │
+│  (LinkedIn)    │  │  (GitHub)      │  │  (Custom)      │
+└────────────────┘  └────────────────┘  └────────────────┘
+```
+
+**See [docs/MCP_SAAS_ARCHITECTURE.md](docs/MCP_SAAS_ARCHITECTURE.md) for detailed SaaS architecture.**
 
 ## 🛠️ How It Works (Summary)
 
@@ -356,6 +392,11 @@ See the [mcp-proxy documentation](https://github.com/sparfenyuk/mcp-proxy) for m
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - Complete setup guide using `uv`
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and design
 - **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Deployment guides for various environments
+
+### SaaS Architecture
+- **[docs/MCP_SAAS_ARCHITECTURE.md](docs/MCP_SAAS_ARCHITECTURE.md)** - MCP Server as SaaS architecture
+- **[docs/MCP_SAAS_IMPLEMENTATION.md](docs/MCP_SAAS_IMPLEMENTATION.md)** - Implementation guide for SaaS MCP server
+- **[docs/MCP_SAAS_AUTHENTICATION.md](docs/MCP_SAAS_AUTHENTICATION.md)** - Authentication strategies and implementation
 
 ### Development
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Guidelines for contributing
