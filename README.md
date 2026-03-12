@@ -12,7 +12,10 @@
 
 ---
 
-## 🚀 Recent Updates: Dynamic MCP Server Spin-Up & Minimal Tool Context
+## 🚀 Recent Updates: This has been integrated into [SmarterMCP](https://smartermcp.com) in the preview mode.
+
+
+Dynamic MCP Server Spin-Up & Minimal Tool Context
 
 ### 🟢 Dynamic MCP Server Orchestration
 - The system now **spins up only the MCP servers required for a given user query**. Five popular MCP servers (including the Dynamic Tool Retriever MCP) are kept warm by default; others are started on demand and kept alive for 10 minutes after last use.
